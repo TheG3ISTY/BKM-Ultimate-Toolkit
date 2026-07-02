@@ -182,6 +182,8 @@
   .c-checked{font-family:var(--mono);font-size:.84rem;color:var(--muted);white-space:nowrap}
   .c-link,.c-act{text-align:center;white-space:nowrap}
   .row-refresh{margin-right:.35rem;vertical-align:middle}
+  .sync-badge{font-size:.78rem;color:var(--accent-2);font-family:var(--mono);align-self:center;animation:pulse 1.1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
   .na{color:var(--faint)}
 
   .cell-input{
@@ -278,20 +280,11 @@
       </div>
     </div>
     <div class="topbar-right">
-      <button class="btn" id="export-btn" title="Download targets.json">⬇ Export</button>
-      <button class="btn" id="import-btn" title="Load a targets JSON file">⬆ Import</button>
-      <input type="file" id="import-file" accept="application/json,.json" hidden>
+      <span id="sync-badge" class="sync-badge" hidden>⟳ syncing…</span>
+      <button class="btn" id="export-btn" title="Download a JSON backup of the shared list">⬇ Export</button>
       <button class="btn btn-ghost-danger" id="logout-btn" title="Forget key &amp; lock">⎋ Log out</button>
     </div>
   </header>
-
-  <div id="json-banner" class="banner" hidden>
-    <span id="json-banner-text"></span>
-    <span class="banner-actions">
-      <button class="btn btn-small btn-primary" id="json-load">Load it</button>
-      <button class="btn btn-small" id="json-dismiss">Dismiss</button>
-    </span>
-  </div>
 
   <section class="controls">
     <form id="add-form" class="add-form" autocomplete="off">
@@ -299,7 +292,8 @@
       <button class="btn btn-primary" type="submit">+ Add</button>
     </form>
     <div class="toolbar">
-      <button class="btn btn-update" id="update-btn" title="Refresh all targets in one batched request">Global Refresh</button>
+      <button class="btn btn-update" id="update-btn" title="Fetch stats for all targets in one batched request, saved to the shared list">Global Refresh</button>
+      <button class="btn" id="reload-btn" title="Reload the shared list to see others’ changes">↻ Reload</button>
       <span id="update-status" class="update-status"></span>
       <span class="spacer"></span>
       <input id="filter-input" class="input input-filter" placeholder="Filter…" spellcheck="false">
@@ -341,6 +335,9 @@
   const FACTION_ID = 56875;
   const FACTION_NAME = 'Boykisser Meetup';
   const DEFAULT_STATS_URL = 'https://ffscouter.com/api/v1/get-stats?key={KEY}&targets={IDS}';
+  // Shared Google Sheet backend (Apps Script web app). The list lives here so the
+  // whole faction shares it; every call is verified server-side against faction 56875.
+  const SHEET_API = 'https://script.google.com/macros/s/AKfycbwNqeGM6Q5Z11oqOl-Itc3selmQnv6PB5pNt6dixEvFwRxaKrRgK4JJCoGMx58tdxYh8A/exec';
   const CHUNK_SIZE = 200;          // FFScouter allows up to 205 IDs / request
   const CHUNK_SPACING_MS = 3500;   // spacing when chunking -> well under 20/min
   const RATE_MAX = 20;             // hard cap: 20 requests / 60s / IP
@@ -350,7 +347,7 @@
   const LS = {
     key:'bk_hitlist_key', verified:'bk_hitlist_verified', user:'bk_hitlist_user',
     targets:'bk_hitlist_targets',
-    human:'bk_hitlist_human', offered:'bk_hitlist_offered_json', sort:'bk_hitlist_sort',
+    human:'bk_hitlist_human', sort:'bk_hitlist_sort',
   };
 
   /* ===================== State ===================== */
@@ -359,7 +356,7 @@
   let displayHuman = false;
   let filterText = '';
   let cooling = false;
-  let pendingJson = null;
+  let syncing = false;
 
   /* ===================== Small helpers ===================== */
   const $ = s => document.querySelector(s);
@@ -417,14 +414,79 @@
     catch(e){ return []; }
   }
   function saveTargets(){ lsSet(LS.targets, JSON.stringify(targets.map(exportTarget))); }
-  function dedupeById(list){
-    const seen = new Set(), out = [];
-    for(const t of list){
-      const id = extractId(t.name);
-      const k = id == null ? ('name:'+t.name) : ('id:'+id);
-      if(seen.has(k)) continue; seen.add(k); out.push(t);
+
+  /* ===================== Shared list (Google Sheet backend) ===================== */
+  function setSync(on){ syncing = on; const b = $('#sync-badge'); if(b) b.hidden = !on; }
+
+  // POST an action to the Apps Script web app. The body is sent as text/plain so the
+  // browser makes a "simple" request (no CORS preflight, which Apps Script can't answer).
+  async function sheetCall(action, extra){
+    const payload = Object.assign({ action, key: statsKey() }, extra || {});
+    let res;
+    try { res = await fetch(SHEET_API, { method:'POST', body: JSON.stringify(payload) }); }
+    catch(e){ throw tagged('sheet_net'); }
+    if(!res.ok) throw tagged('sheet_http', { status: res.status });
+    try { return JSON.parse(await res.text()); }   // may be { ok:false, error:... }
+    catch(e){ throw tagged('sheet_json'); }
+  }
+  function applyServerTargets(list){
+    targets = (Array.isArray(list) ? list : []).map(normalizeTarget).filter(Boolean);
+    saveTargets();   // local cache for instant next load
+    render();
+  }
+  function sheetErrMsg(code){
+    return ({
+      duplicate:    'That target is already on the list.',
+      not_found:    'That target is no longer on the list.',
+      bad_name:     'Name must include a target ID like [123456].',
+      not_verified: 'The shared list rejected your key (faction check failed). Log out and back in.',
+      missing_key:  'No key found — log out and back in.',
+      busy:         'The list is busy — try again in a moment.',
+    })[code] || ('Shared-list error: ' + code + '.');
+  }
+  function handleSheetError(err, prefix){
+    let m;
+    switch(err && err.kind){
+      case 'sheet_net':  m = 'Couldn’t reach the shared list (network or CORS).'; break;
+      case 'sheet_http': m = 'Shared list server error (HTTP ' + err.status + ').'; break;
+      case 'sheet_json': m = 'Shared list returned unreadable data.'; break;
+      default:           m = 'Shared list sync failed.';
     }
-    return out;
+    toast((prefix ? prefix + ' ' : '') + m, 'err');
+  }
+  // Run a mutating action; apply whatever list the server returns; surface soft errors.
+  async function mutate(action, extra){
+    setSync(true);
+    try {
+      const data = await sheetCall(action, extra);
+      if(Array.isArray(data.targets)) applyServerTargets(data.targets);
+      if(!data.ok) toast(sheetErrMsg(data.error), data.error === 'duplicate' ? 'warn' : 'err');
+      return data;
+    } catch(err){
+      handleSheetError(err);
+      return { ok:false, error:(err && err.kind) || 'error' };
+    } finally { setSync(false); }
+  }
+  // Pull the latest list from the sheet (no stat fetch).
+  async function syncList(){
+    setSync(true);
+    try {
+      const data = await sheetCall('list');
+      if(data.ok && Array.isArray(data.targets)) applyServerTargets(data.targets);
+      else if(!data.ok) toast(sheetErrMsg(data.error), 'err');
+    } catch(err){
+      handleSheetError(err, 'Couldn’t load the shared list.');
+    } finally { setSync(false); }
+  }
+  // FFScouter response object -> a stat row for the sheet's setStats action.
+  function toStatEntry(id, o, now){
+    const raw = o ? o.bs_estimate : null;
+    return {
+      id: String(id),
+      statEstimate: (typeof raw === 'number' && isFinite(raw)) ? Math.round(raw / 1000) * 1000 : null,
+      statHuman: (o && typeof o.bs_estimate_human === 'string') ? o.bs_estimate_human : null,
+      checkedAt: now,
+    };
   }
 
   function fmtStat(t){
@@ -467,17 +529,13 @@
     }
   }
 
-  function unlock(){
+  async function unlock(){
     $('#gate').hidden = true;
     $('#app').hidden = false;
     const who = lsGet(LS.user) || '';
     $('#whoami').textContent = who ? ('✓ Verified: ' + who) : '✓ Verified';
-    render();
-    if(targets.length === 0){
-      const nm = who ? who.split(' [')[0] : '';
-      toast('You’re in' + (nm ? (', ' + nm) : '') + '! This is your hit list. Add a target with “+ Add”, then hit Global Refresh.', 'ok');
-    }
-    maybeOfferTargetsJson();
+    render();                 // show cached list instantly
+    await syncList();         // then pull the latest shared list from the Sheet
   }
   function logout(){
     // Clears the stored key + verified flag and returns to the gate. Keeps the target list & settings.
@@ -526,27 +584,6 @@
     return data;
   }
 
-  // Apply a stats array onto targets. Nulls are VALID -> "N/A", still stamps checkedAt.
-  function applyStats(arr){
-    const byId = new Map();
-    for(const o of arr){ if(o && o.player_id != null) byId.set(Number(o.player_id), o); }
-    const now = fmtNow();
-    let updated = 0;
-    for(const t of targets){
-      const id = extractId(t.name);
-      if(id == null) continue;
-      if(byId.has(id)){
-        const o = byId.get(id);
-        const raw = o.bs_estimate;
-        t.statEstimate = (typeof raw === 'number' && isFinite(raw)) ? Math.round(raw / 1000) * 1000 : null;
-        t.statHuman = (typeof o.bs_estimate_human === 'string') ? o.bs_estimate_human : null;
-        t.checkedAt = now;   // stamp even when everything came back null
-        updated++;
-      }
-    }
-    return updated;
-  }
-
   function errToMsg(err){
     switch(err && err.kind){
       case 'cors':  return 'Stats API request blocked by CORS (or the network is down). The stats API must allow cross-origin browser requests, or you must route it through a proxy / serverless function. See README → CORS.';
@@ -570,8 +607,9 @@
     t._busy = true; render();
     try {
       await rateGate();
-      applyStats(await fetchChunk([id]));
-      saveTargets();
+      const arr = await fetchChunk([id]);
+      const byId = new Map(arr.filter(o => o && o.player_id != null).map(o => [Number(o.player_id), o]));
+      await mutate('setStats', { stats: [ toStatEntry(id, byId.get(id) || null, fmtNow()) ] });
       toast('Refreshed ' + t.name + '.', 'ok');
     } catch(err){
       handleStatsError(err);
@@ -608,7 +646,7 @@
     if(ids.length === 0){ toast('No valid targets to update.', 'warn'); return; }
 
     setUpdating(true);
-    setUpdateStatus('Contacting stats API…');
+    setUpdateStatus('Fetching estimates…');
     const chunks = [];
     for(let i = 0; i < ids.length; i += CHUNK_SIZE) chunks.push(ids.slice(i, i + CHUNK_SIZE));
 
@@ -626,36 +664,56 @@
       return;
     }
 
-    const n = applyStats(combined);
-    saveTargets();
-    render();
-    setUpdateStatus(`Updated ${n} of ${ids.length} target${ids.length === 1 ? '' : 's'} · ${fmtNow()}`);
-    toast(`Stats updated for ${n} target${n === 1 ? '' : 's'}.`, 'ok');
+    const byId = new Map(combined.filter(o => o && o.player_id != null).map(o => [Number(o.player_id), o]));
+    const now = fmtNow();
+    const stats = ids.filter(id => byId.has(id)).map(id => toStatEntry(id, byId.get(id), now));
+
+    setUpdateStatus('Saving to the shared list…');
+    const data = await mutate('setStats', { stats });   // writes to the Sheet, re-renders from truth
+    setUpdating(false);
+    if(data.ok) {
+      setUpdateStatus(`Updated ${stats.length} of ${ids.length} target${ids.length === 1 ? '' : 's'} · ${now}`);
+      toast(`Stats updated for ${stats.length} target${stats.length === 1 ? '' : 's'}.`, 'ok');
+    } else {
+      setUpdateStatus('Fetched estimates, but saving to the shared list failed.');
+    }
     startCooldown();
   }
 
-  /* ===================== Target operations ===================== */
-  function addTarget(raw){
+  /* ===================== Target operations (all write to the shared Sheet) ===================== */
+  async function addTarget(raw){
     const name = (raw || '').trim();
     const errEl = $('#add-error'); errEl.textContent = '';
     if(!name){ errEl.textContent = 'Enter a name like “Frenemy [3981563]”.'; return false; }
     const id = extractId(name);
     if(id == null){ errEl.textContent = 'Missing target ID. Use the format Name [ID], e.g. Frenemy [3981563].'; return false; }
     if(targets.some(t => extractId(t.name) === id)){ errEl.textContent = 'That target ID (' + id + ') is already in the list.'; return false; }
-    targets.push({ name, why:'', statEstimate:null, statHuman:null, checkedAt:null });
-    saveTargets(); render();
-    return true;
+    const data = await mutate('add', { name });
+    if(data.ok) toast('Added ' + name + ' — everyone will see it.', 'ok');
+    return !!data.ok;
   }
-  function commitName(t, value){
+  async function commitName(t, value){
     const name = (value || '').trim();
     if(name === t.name) return;
     const id = extractId(name);
     if(id == null){ toast('Name must include a target ID like [123456]. Reverted.', 'err'); render(); return; }
     if(targets.some(o => o !== t && extractId(o.name) === id)){ toast('Another target already uses ID ' + id + '. Reverted.', 'err'); render(); return; }
-    t.name = name; saveTargets(); render();
+    const oldId = extractId(t.name);
+    if(oldId == null){ render(); return; }
+    await mutate('update', { id: String(oldId), name });
   }
-  function commitWhy(t, value){ t.why = value; saveTargets(); }
-  function removeTarget(t){ const i = targets.indexOf(t); if(i >= 0){ targets.splice(i,1); saveTargets(); render(); } }
+  async function commitWhy(t, value){
+    if((value || '') === (t.why || '')) return;
+    const id = extractId(t.name);
+    if(id == null) return;
+    await mutate('update', { id: String(id), why: value });
+  }
+  async function removeTarget(t){
+    const id = extractId(t.name);
+    if(id == null) return;
+    const data = await mutate('delete', { id: String(id) });
+    if(data.ok) toast('Removed ' + t.name + '.', 'ok');
+  }
 
   /* ===================== Sorting ===================== */
   function tieName(a,b){ return a.name.localeCompare(b.name, undefined, { numeric:true, sensitivity:'base' }); }
@@ -779,7 +837,7 @@
       const tr = document.createElement('tr'); tr.className = 'empty-row';
       const td = document.createElement('td'); td.colSpan = 7;
       td.textContent = targets.length === 0
-        ? '✓ You’re in — this is your hit list, and it’s empty. Add your first target with the “+ Add” box above (e.g. Frenemy [3981563]), then click “Global Refresh” to pull stats.'
+        ? '✓ You’re in. The shared faction list is empty — add a target with the “+ Add” box above (e.g. Frenemy [3981563]) and everyone will see it, then hit “Global Refresh” for stats.'
         : 'No targets match your filter.';
       tr.appendChild(td); tbody.appendChild(tr);
       return;
@@ -798,53 +856,6 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  function extractTargetsArray(data){
-    if(Array.isArray(data)) return data;
-    if(data && Array.isArray(data.targets)) return data.targets;
-    return null;
-  }
-  function importJson(file){
-    const reader = new FileReader();
-    reader.onload = () => {
-      let data; try { data = JSON.parse(reader.result); } catch(e){ toast('Import failed: not valid JSON.', 'err'); return; }
-      const arr = extractTargetsArray(data);
-      if(!arr){ toast('Import failed: expected an array of targets or {"targets":[...]}.', 'err'); return; }
-      const norm = dedupeById(arr.map(normalizeTarget).filter(Boolean));
-      if(norm.length === 0){ toast('Import failed: no valid targets found.', 'err'); return; }
-      if(targets.length > 0 && !confirm('Replace your current ' + targets.length + ' target(s) with ' + norm.length + ' imported target(s)?')) return;
-      targets = norm; saveTargets(); render();
-      toast('Imported ' + targets.length + ' target' + (targets.length === 1 ? '' : 's') + '.', 'ok');
-    };
-    reader.onerror = () => toast('Import failed: could not read file.', 'err');
-    reader.readAsText(file);
-  }
-
-  // Offer to load a targets.json sitting next to index.html (works when served, e.g. GitHub Pages).
-  async function maybeOfferTargetsJson(){
-    if(lsGet(LS.offered) === '1') return;
-    let data;
-    try {
-      const res = await fetch('./targets.json', { cache:'no-store' });
-      if(!res.ok){ lsSet(LS.offered, '1'); return; }
-      data = await res.json();
-    } catch(e){ return; }   // file:// or missing -> silently skip (try again next served load)
-    const arr = extractTargetsArray(data);
-    if(!arr || arr.length === 0){ lsSet(LS.offered, '1'); return; }
-    pendingJson = arr;
-    $('#json-banner-text').textContent = 'Found targets.json next to this page with ' + arr.length + ' target' + (arr.length === 1 ? '' : 's') + '.';
-    $('#json-banner').hidden = false;
-  }
-  function onJsonLoad(){
-    if(!pendingJson) return onJsonDismiss();
-    const norm = dedupeById(pendingJson.map(normalizeTarget).filter(Boolean));
-    if(norm.length === 0){ toast('targets.json had no valid targets.', 'warn'); return onJsonDismiss(); }
-    if(targets.length > 0 && !confirm('Replace your current ' + targets.length + ' target(s) with ' + norm.length + ' from targets.json?')) return;
-    targets = norm; saveTargets(); render();
-    lsSet(LS.offered, '1'); $('#json-banner').hidden = true; pendingJson = null;
-    toast('Loaded ' + targets.length + ' target' + (targets.length === 1 ? '' : 's') + ' from targets.json.', 'ok');
-  }
-  function onJsonDismiss(){ lsSet(LS.offered, '1'); $('#json-banner').hidden = true; pendingJson = null; }
-
   function setHuman(on){ displayHuman = !!on; lsSet(LS.human, on ? '1' : '0'); render(); }
 
   /* ===================== Init ===================== */
@@ -858,16 +869,16 @@
     $('#gate-show').addEventListener('change', e => { $('#gate-key').type = e.target.checked ? 'text' : 'password'; });
 
     // App
-    $('#add-form').addEventListener('submit', e => { e.preventDefault(); if(addTarget($('#add-input').value)){ $('#add-input').value = ''; $('#add-input').focus(); } });
+    $('#add-form').addEventListener('submit', async e => { e.preventDefault(); if(await addTarget($('#add-input').value)){ $('#add-input').value = ''; $('#add-input').focus(); } });
     $('#update-btn').addEventListener('click', updateStats);
+    $('#reload-btn').addEventListener('click', syncList);
     $('#logout-btn').addEventListener('click', logout);
     $('#export-btn').addEventListener('click', exportJson);
-    $('#import-btn').addEventListener('click', () => $('#import-file').click());
-    $('#import-file').addEventListener('change', e => { const f = e.target.files[0]; if(f) importJson(f); e.target.value = ''; });
     $('#human-toggle').addEventListener('change', e => setHuman(e.target.checked));
     $('#filter-input').addEventListener('input', e => { filterText = e.target.value; render(); });
-    $('#json-load').addEventListener('click', onJsonLoad);
-    $('#json-dismiss').addEventListener('click', onJsonDismiss);
+    // Re-pull the shared list when returning to the tab (debounced), so you see others' changes.
+    let focusT = 0;
+    window.addEventListener('focus', () => { if(!$('#app').hidden && Date.now() - focusT > 8000){ focusT = Date.now(); syncList(); } });
 
     // Sort headers
     document.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => setSort(th.dataset.sort)));
