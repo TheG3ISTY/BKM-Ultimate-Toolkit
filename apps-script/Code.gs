@@ -16,6 +16,8 @@
 var FACTION_ID = 56875;
 var SHEET_NAME = 'Targets';
 var HEADERS = ['Name', 'Why', 'StatEstimate', 'StatHuman', 'CheckedAt'];
+// Faction positions allowed to REMOVE targets (compared case-insensitively).
+var REMOVE_ROLES = ['boykisser', 'dommy mommy', 'leader', 'co-leader'];
 
 function doGet(e) {
   return json({ ok: true, service: 'BKM hitlist backend', hint: 'POST {action, key, ...} as text/plain' });
@@ -28,42 +30,56 @@ function doPost(e) {
 
   var key = (body.key || '').trim();
   if (!key) return json({ ok: false, error: 'missing_key' });
-  if (!verify(key)) return json({ ok: false, error: 'not_verified' });
+  var member = memberInfo(key);
+  if (!member.ok) return json({ ok: false, error: 'not_verified' });
+  var mayRemove = canRemove(member.position);
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
+  var out;
   try {
     switch (body.action) {
-      case 'list':     return json({ ok: true, targets: readAll() });
-      case 'add':      return json(addTarget(body));
-      case 'update':   return json(updateTarget(body));
-      case 'delete':   return json(deleteTarget(body));
-      case 'setStats': return json(setStats(body));
-      default:         return json({ ok: false, error: 'unknown_action' });
+      case 'list':     out = { ok: true, targets: readAll() }; break;
+      case 'add':      out = addTarget(body); break;
+      case 'update':   out = updateTarget(body); break;
+      case 'delete':   out = mayRemove ? deleteTarget(body)
+                                       : { ok: false, error: 'forbidden', targets: readAll() }; break;
+      case 'setStats': out = setStats(body); break;
+      default:         out = { ok: false, error: 'unknown_action' };
     }
   } finally {
     lock.releaseLock();
   }
+  // Tell the client the caller's remove permission (+ position) on every response.
+  out.mayRemove = mayRemove;
+  out.position = member.position;
+  return json(out);
 }
 
 /* ---------- Torn faction verification (cached 5 min, key hashed) ---------- */
-function verify(key) {
+// Returns { ok: <in faction 56875>, position: <faction rank string> }.
+function memberInfo(key) {
   var cache = CacheService.getScriptCache();
   var ck = cacheKey(key);
   var hit = cache.get(ck);
-  if (hit === '1') return true;
-  if (hit === '0') return false;
-  var ok = false;
+  if (hit) { try { var p = JSON.parse(hit); if (p && typeof p.ok === 'boolean') return p; } catch (e) {} }
+  var info = { ok: false, position: '' };
   try {
     var resp = UrlFetchApp.fetch(
       'https://api.torn.com/user/?selections=profile&key=' + encodeURIComponent(key) + '&comment=BKMSheet',
       { muteHttpExceptions: true }
     );
     var data = JSON.parse(resp.getContentText());
-    ok = !!(data && !data.error && data.faction && Number(data.faction.faction_id) === FACTION_ID);
-  } catch (err) { ok = false; }
-  cache.put(ck, ok ? '1' : '0', 300);
-  return ok;
+    if (data && !data.error && data.faction && Number(data.faction.faction_id) === FACTION_ID) {
+      info.ok = true;
+      info.position = String(data.faction.position || '');
+    }
+  } catch (err) {}
+  cache.put(ck, JSON.stringify(info), 300);
+  return info;
+}
+function canRemove(position) {
+  return REMOVE_ROLES.indexOf(String(position || '').trim().toLowerCase()) !== -1;
 }
 function cacheKey(key) {
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, key);
