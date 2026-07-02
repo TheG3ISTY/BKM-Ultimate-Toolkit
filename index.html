@@ -214,6 +214,14 @@
   .test-out{font-family:var(--mono);font-size:.8rem;margin:.9rem 0 0;min-height:1.1em;word-break:break-word;color:var(--muted)}
   .test-out.ok{color:var(--ok)}
   .test-out.err{color:var(--danger)}
+  .settings-intro{background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.28);color:var(--text);font-size:.9rem;padding:.8rem .9rem;border-radius:var(--radius-sm);margin:0 0 1.1rem}
+  details.advanced{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2);margin-bottom:.3rem}
+  details.advanced>summary{cursor:pointer;padding:.6rem .8rem;font-size:.82rem;font-weight:600;color:var(--muted);list-style:none;user-select:none}
+  details.advanced>summary::-webkit-details-marker{display:none}
+  details.advanced>summary::before{content:'▸ ';color:var(--faint)}
+  details.advanced[open]>summary::before{content:'▾ '}
+  details.advanced>summary:hover{color:var(--text)}
+  .advanced-body{padding:.2rem .8rem .8rem}
 
   /* ===== Toast ===== */
   #toast{
@@ -324,26 +332,36 @@
 <div id="settings-modal" class="modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="set-title">
     <div class="modal-head">
-      <h2 id="set-title">⚙ Stats API Settings</h2>
+      <h2 id="set-title">⚙ Stats API Settings <span style="font-weight:400;color:var(--muted);font-size:.8rem">(optional)</span></h2>
       <button class="icon-btn" id="set-cancel" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
-      <label class="field-label" for="set-url">Stats endpoint URL template</label>
-      <input id="set-url" class="input mono" spellcheck="false">
-      <p class="help">Use <code>{KEY}</code> and <code>{IDS}</code> as placeholders. <code>{IDS}</code> is replaced with a comma-separated list of target IDs. The default is the FFScouter batch API.</p>
+      <p class="settings-intro">✅ Nothing to set up here for normal use — the app already uses your verified Torn key with the FFScouter stats API. Just close this and hit <strong>Update Stats</strong>. The options below are only for power users who want a different stats provider or a CORS proxy.</p>
 
-      <label class="field-label" for="set-key">Stats API key</label>
-      <input id="set-key" class="input mono" type="text" spellcheck="false">
-      <p class="help">Leave blank to reuse your verified Torn key. Override only if your stats provider needs a different key.</p>
+      <details class="advanced">
+        <summary>Advanced overrides</summary>
+        <div class="advanced-body">
+          <label class="field-label" for="set-url">Stats endpoint URL template</label>
+          <input id="set-url" class="input mono" spellcheck="false">
+          <p class="help">Use <code>{KEY}</code> and <code>{IDS}</code> as placeholders. <code>{IDS}</code> becomes a comma-separated list of target IDs. Default is the FFScouter batch API — you normally never change this.</p>
+
+          <label class="field-label" for="set-key">Stats API key (override)</label>
+          <input id="set-key" class="input mono" type="text" spellcheck="false">
+          <p class="help">Leave blank to reuse your verified Torn key. Override only if your stats provider needs a different key.</p>
+
+          <div class="set-actions">
+            <button class="btn" id="set-test">Test endpoint</button>
+            <button class="btn" id="set-reset">Reset URL to default</button>
+          </div>
+          <p id="set-test-out" class="test-out"></p>
+        </div>
+      </details>
 
       <div class="set-actions">
-        <button class="btn" id="set-test">Test endpoint</button>
-        <button class="btn" id="set-reset">Reset URL to default</button>
         <span class="spacer"></span>
-        <button class="btn" id="set-cancel2">Cancel</button>
+        <button class="btn" id="set-cancel2">Close</button>
         <button class="btn btn-primary" id="set-save">Save</button>
       </div>
-      <p id="set-test-out" class="test-out"></p>
       <p class="help small" style="margin-top:1rem">Rate limit: max <strong>20 requests/minute per IP</strong>. One “Update Stats” click is a single batched request (up to 200 IDs); larger lists are auto-chunked and spaced ~3.5s apart, and the button has a short cooldown so it can’t be spammed.</p>
     </div>
   </div>
@@ -492,6 +510,10 @@
     const who = lsGet(LS.user) || '';
     $('#whoami').textContent = who ? ('✓ Verified: ' + who) : '✓ Verified';
     render();
+    if(targets.length === 0){
+      const nm = who ? who.split(' [')[0] : '';
+      toast('You’re in' + (nm ? (', ' + nm) : '') + '! This is your hit list. Add a target with “+ Add”, then hit Update Stats.', 'ok');
+    }
     maybeOfferTargetsJson();
   }
   function logout(){
@@ -799,7 +821,7 @@
       const tr = document.createElement('tr'); tr.className = 'empty-row';
       const td = document.createElement('td'); td.colSpan = 7;
       td.textContent = targets.length === 0
-        ? 'No targets yet. Add one above, Import a list, or load targets.json.'
+        ? '✓ You’re in — this is your hit list, and it’s empty. Add your first target with the “+ Add” box above (e.g. Frenemy [3981563]), then click “Update Stats”. You don’t need to open Settings.'
         : 'No targets match your filter.';
       tr.appendChild(td); tbody.appendChild(tr);
       return;
@@ -871,7 +893,7 @@
     $('#set-key').value = lsGet(LS.statsKey) || '';
     $('#set-key').placeholder = 'Defaults to your verified Torn key' + (lsGet(LS.key) ? (' (' + maskKey(lsGet(LS.key)) + ')') : '');
   }
-  function openSettings(){ renderSettingsFields(); const o = $('#set-test-out'); o.textContent = ''; o.className = 'test-out'; $('#settings-modal').hidden = false; $('#set-url').focus(); }
+  function openSettings(){ renderSettingsFields(); const o = $('#set-test-out'); o.textContent = ''; o.className = 'test-out'; $('#settings-modal').hidden = false; }
   function closeSettings(){ $('#settings-modal').hidden = true; }
   function saveSettings(){
     const url = $('#set-url').value.trim(), key = $('#set-key').value.trim();
