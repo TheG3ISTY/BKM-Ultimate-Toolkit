@@ -19,6 +19,15 @@ var HEADERS = ['Name', 'Why', 'StatEstimate', 'StatHuman', 'CheckedAt'];
 // Faction positions allowed to REMOVE targets (compared case-insensitively).
 var REMOVE_ROLES = ['boykisser', 'dommy mommy', 'leader', 'co-leader'];
 
+// ---- War list (second tab) ----
+// The War list is generated from an enemy faction ID and is master-controlled:
+// only this Torn player may generate/edit/activate it. Everyone else in 56875
+// can only READ it, and only once the master has activated it.
+var MASTER_ID = 4117638;                 // TheG3ISTY — sole War-list master
+var WAR_SHEET = 'War';
+var WAR_HEADERS = ['Name', 'Position', 'Level', 'Status', 'StatEstimate', 'StatHuman', 'CheckedAt'];
+var WAR_META_KEY = 'warMeta';            // stored in Script Properties: { active, factionId, factionName, generatedAt }
+
 function doGet(e) {
   return json({ ok: true, service: 'BKM hitlist backend', hint: 'POST {action, key, ...} as text/plain' });
 }
@@ -33,6 +42,7 @@ function doPost(e) {
   var member = memberInfo(key);
   if (!member.ok) return json({ ok: false, error: 'not_verified' });
   var mayRemove = canRemove(member.position);
+  var master = isMaster(member);
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
@@ -45,14 +55,22 @@ function doPost(e) {
       case 'delete':   out = mayRemove ? deleteTarget(body)
                                        : { ok: false, error: 'forbidden', targets: readAll() }; break;
       case 'setStats': out = setStats(body); break;
+      // ---- War list ----
+      case 'warStatus':     out = warStatus(master); break;
+      case 'warGenerate':   out = master ? warGenerate(body)      : forbidden(); break;
+      case 'warSetStats':   out = master ? warSetStats(body)      : forbidden(); break;
+      case 'warActivate':   out = master ? warSetActive(true)     : forbidden(); break;
+      case 'warDeactivate': out = master ? warSetActive(false)    : forbidden(); break;
+      case 'warClear':      out = master ? warClear()             : forbidden(); break;
       default:         out = { ok: false, error: 'unknown_action' };
     }
   } finally {
     lock.releaseLock();
   }
-  // Tell the client the caller's remove permission (+ position) on every response.
+  // Tell the client the caller's permissions (+ position) on every response.
   out.mayRemove = mayRemove;
   out.position = member.position;
+  out.isMaster = master;
   return json(out);
 }
 
@@ -63,7 +81,7 @@ function memberInfo(key) {
   var ck = cacheKey(key);
   var hit = cache.get(ck);
   if (hit) { try { var p = JSON.parse(hit); if (p && typeof p.ok === 'boolean') return p; } catch (e) {} }
-  var info = { ok: false, position: '' };
+  var info = { ok: false, position: '', playerId: 0 };
   try {
     var resp = UrlFetchApp.fetch(
       'https://api.torn.com/user/?selections=profile&key=' + encodeURIComponent(key) + '&comment=BKMSheet',
@@ -73,6 +91,7 @@ function memberInfo(key) {
     if (data && !data.error && data.faction && Number(data.faction.faction_id) === FACTION_ID) {
       info.ok = true;
       info.position = String(data.faction.position || '');
+      info.playerId = Number(data.player_id || 0);
     }
   } catch (err) {}
   cache.put(ck, JSON.stringify(info), 300);
@@ -81,6 +100,10 @@ function memberInfo(key) {
 function canRemove(position) {
   return REMOVE_ROLES.indexOf(String(position || '').trim().toLowerCase()) !== -1;
 }
+function isMaster(member) {
+  return !!member && Number(member.playerId) === MASTER_ID;
+}
+function forbidden() { return { ok: false, error: 'forbidden' }; }
 function cacheKey(key) {
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, key);
   return 'v_' + Utilities.base64Encode(d);
@@ -182,6 +205,139 @@ function setStats(body) {
     ]]);
   }
   return { ok: true, targets: readAll() };
+}
+
+/* ---------- War list ---------- */
+function warSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(WAR_SHEET);
+  if (!sh) sh = ss.insertSheet(WAR_SHEET);
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(WAR_HEADERS);
+    sh.getRange('A:A').setNumberFormat('@');  // Name -> plain text (keep "[id]")
+    sh.getRange('B:B').setNumberFormat('@');  // Position -> text
+    sh.getRange('D:D').setNumberFormat('@');  // Status -> text
+    sh.getRange('G:G').setNumberFormat('@');  // CheckedAt -> text
+    sh.getRange('E:E').setNumberFormat('0');  // StatEstimate -> integer
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function warMeta() {
+  var raw = PropertiesService.getScriptProperties().getProperty(WAR_META_KEY);
+  var m = { active: false, factionId: 0, factionName: '', generatedAt: '' };
+  if (raw) { try { var p = JSON.parse(raw); if (p) m = { active: !!p.active, factionId: Number(p.factionId||0), factionName: String(p.factionName||''), generatedAt: String(p.generatedAt||'') }; } catch (e) {} }
+  return m;
+}
+function saveWarMeta(m) {
+  PropertiesService.getScriptProperties().setProperty(WAR_META_KEY, JSON.stringify(m));
+}
+function warReadAll() {
+  var sh = warSheet();
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var rows = sh.getRange(2, 1, last - 1, WAR_HEADERS.length).getValues();
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var name = String(r[0] || '').trim();
+    if (!name) continue;
+    out.push({
+      name: name,
+      position: String(r[1] || ''),
+      level: (r[2] === '' || r[2] === null) ? null : Number(r[2]),
+      status: String(r[3] || ''),
+      statEstimate: (r[4] === '' || r[4] === null) ? null : Number(r[4]),
+      statHuman: (r[5] === '' || r[5] === null) ? null : String(r[5]),
+      checkedAt: (r[6] === '' || r[6] === null) ? null : String(r[6])
+    });
+  }
+  return out;
+}
+function warFindRowById(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var names = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (var i = 0; i < names.length; i++) {
+    if (idFromName(names[i][0]) === id) return i + 2;
+  }
+  return -1;
+}
+// Read-only status for everyone; the roster itself is only returned when the
+// list is active OR the caller is the master (so the master can prep privately).
+function warStatus(master) {
+  var m = warMeta();
+  var out = { ok: true, active: m.active, factionId: m.factionId, factionName: m.factionName, generatedAt: m.generatedAt };
+  if (m.active || master) out.war = warReadAll();
+  return out;
+}
+// Pull the enemy faction's roster from Torn and replace the War tab with it.
+function warGenerate(body) {
+  var fid = parseInt(body.factionId, 10);
+  if (!fid) return { ok: false, error: 'bad_faction' };
+  var key = String(body.key || '').trim();
+  var data;
+  try {
+    var resp = UrlFetchApp.fetch(
+      'https://api.torn.com/faction/' + fid + '?selections=basic&key=' + encodeURIComponent(key) + '&comment=BKMWar',
+      { muteHttpExceptions: true }
+    );
+    data = JSON.parse(resp.getContentText());
+  } catch (err) { return { ok: false, error: 'torn_parse' }; }
+  if (!data || data.error) return { ok: false, error: 'torn_error', detail: (data && data.error) ? data.error.error : '' };
+
+  var members = data.members || {};
+  var sh = warSheet();
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, WAR_HEADERS.length).clearContent();  // wipe old roster, keep header
+
+  var rows = [];
+  for (var pid in members) {
+    if (!members.hasOwnProperty(pid)) continue;
+    var mm = members[pid] || {};
+    var nm = String(mm.name || '') + ' [' + pid + ']';
+    var st = mm.status ? String(mm.status.description || mm.status.state || '') : '';
+    rows.push([nm, String(mm.position || ''), Number(mm.level || 0), st, '', '', '']);
+  }
+  if (rows.length) sh.getRange(2, 1, rows.length, WAR_HEADERS.length).setValues(rows);
+
+  var m = warMeta();
+  m.factionId = fid;
+  m.factionName = String(data.name || ('Faction ' + fid));
+  m.generatedAt = nowStr();
+  saveWarMeta(m);
+  return { ok: true, war: warReadAll(), factionId: m.factionId, factionName: m.factionName, generatedAt: m.generatedAt, active: m.active };
+}
+function warSetStats(body) {
+  var stats = body.stats || [];
+  var sh = warSheet();
+  for (var i = 0; i < stats.length; i++) {
+    var s = stats[i];
+    var row = warFindRowById(sh, String(s.id));
+    if (row === -1) continue;
+    sh.getRange(row, 5, 1, 3).setValues([[
+      (s.statEstimate === null || s.statEstimate === undefined) ? '' : s.statEstimate,
+      (s.statHuman === null || s.statHuman === undefined) ? '' : s.statHuman,
+      (s.checkedAt === null || s.checkedAt === undefined) ? '' : s.checkedAt
+    ]]);
+  }
+  return { ok: true, war: warReadAll() };
+}
+function warSetActive(flag) {
+  var m = warMeta();
+  m.active = !!flag;
+  saveWarMeta(m);
+  return { ok: true, active: m.active, war: warReadAll(), factionId: m.factionId, factionName: m.factionName, generatedAt: m.generatedAt };
+}
+function warClear() {
+  var sh = warSheet();
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, WAR_HEADERS.length).clearContent();
+  saveWarMeta({ active: false, factionId: 0, factionName: '', generatedAt: '' });
+  return { ok: true, active: false, war: [], factionId: 0, factionName: '', generatedAt: '' };
+}
+function nowStr() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
 }
 
 function json(obj) {

@@ -34,6 +34,27 @@ Do these steps once, then send Claude the **Web app URL**.
 
 ---
 
+## War list (second tab)
+
+The app has a second view, **War List**, generated from an enemy faction ID.
+It's **master-controlled**: only one Torn player may generate, update, activate,
+or clear it. Everyone else in the faction can only *read* it, and only once the
+master has **activated** it (before that, only the master sees it).
+
+- The master is pinned in `Code.gs` as `var MASTER_ID = 4117638;` (TheG3ISTY).
+  To hand the tool to someone else, change that number to their Torn player ID
+  and redeploy (see below).
+- The roster is written to a separate **`War`** sheet tab (auto-created).
+  Activation state lives in Script Properties, not a cell.
+- Generating pulls the enemy faction's members via Torn's public `faction/{id}`
+  data, using the master's own key. No extra permissions or Full-access key needed.
+
+**After pasting the updated `Code.gs`, you must redeploy** for the War actions to
+go live: **Deploy → Manage deployments → ✏️ edit → Version: New version → Deploy.**
+The `/exec` URL stays the same, so `index.html` needs no change.
+
+---
+
 ### Notes
 - **“Anyone” access is safe here:** every action requires a Torn API key that the
   script verifies belongs to faction **56875** before reading or writing. Randoms

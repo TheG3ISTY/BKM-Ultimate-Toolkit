@@ -116,6 +116,17 @@
   }
   .brand-mark{font-size:1.4rem;filter:drop-shadow(0 0 8px rgba(244,114,182,.4))}
 
+  /* ===== Tabs ===== */
+  .tabs{display:flex;gap:.45rem;margin-bottom:1rem;flex-wrap:wrap}
+  .tab{
+    appearance:none;background:transparent;border:1px solid var(--border);color:var(--muted);
+    padding:.5rem .95rem;border-radius:var(--radius-sm);font-size:.9rem;font-weight:700;cursor:pointer;
+    transition:background .15s,color .15s,border-color .15s;
+  }
+  .tab:hover{background:var(--surface-2);color:var(--text)}
+  .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:#1a1020}
+  .war-pill{font-family:var(--mono);font-weight:700}
+
   /* ===== Gate ===== */
   .gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.2rem}
   .gate-card{
@@ -294,6 +305,12 @@
     </div>
   </header>
 
+  <nav class="tabs">
+    <button class="tab active" id="tab-hitlist" type="button">🎯 Hit List</button>
+    <button class="tab" id="tab-war" type="button" hidden>⚔️ War List</button>
+  </nav>
+
+  <div id="view-hitlist">
   <section class="controls">
     <form id="add-form" class="add-form" autocomplete="off">
       <input id="add-input" class="input" placeholder="Add target — e.g. Frenemy [3981563]" spellcheck="false">
@@ -332,6 +349,56 @@
     <span id="count" class="count"></span>
     <span class="foot-note">Client-side gate only — not real access control. See README.</span>
   </footer>
+  </div><!-- /#view-hitlist -->
+
+  <div id="view-war" hidden>
+    <section class="controls">
+      <div id="war-master-controls" hidden>
+        <form id="war-gen-form" class="add-form" autocomplete="off">
+          <input id="war-faction-input" class="input" placeholder="Enemy faction ID — e.g. 12345" inputmode="numeric" spellcheck="false">
+          <button class="btn btn-primary" id="war-gen-btn" type="submit">⚔️ Generate</button>
+        </form>
+        <div class="toolbar">
+          <button class="btn btn-update" id="war-update-btn" title="Fetch battle-stat estimates for the whole roster">Update Stats</button>
+          <button class="btn" id="war-activate-btn">Activate for faction</button>
+          <button class="btn btn-ghost-danger" id="war-clear-btn" title="Wipe the war list">Clear</button>
+          <span id="war-status-msg" class="update-status"></span>
+        </div>
+      </div>
+      <div class="banner" id="war-info" hidden>
+        <span id="war-info-text"></span>
+        <span id="war-active-pill" class="small war-pill"></span>
+      </div>
+      <div class="toolbar">
+        <span class="spacer"></span>
+        <input id="war-filter-input" class="input input-filter" placeholder="Filter…" spellcheck="false">
+        <label class="checkline"><input type="checkbox" id="war-human-toggle"> Human-readable</label>
+      </div>
+    </section>
+
+    <div class="table-wrap">
+      <table class="targets">
+        <thead>
+          <tr>
+            <th data-sort="name" class="th-sort">Name <span class="sort-ind"></span></th>
+            <th>Position</th>
+            <th class="num">Level</th>
+            <th data-sort="stat" class="th-sort num">Stat Estimate <span class="sort-ind"></span></th>
+            <th data-sort="checked" class="th-sort">Checked When <span class="sort-ind"></span></th>
+            <th>Status</th>
+            <th>Profile</th>
+            <th>Attack</th>
+          </tr>
+        </thead>
+        <tbody id="war-tbody"></tbody>
+      </table>
+    </div>
+
+    <footer class="appfoot">
+      <span id="war-count" class="count"></span>
+      <span class="foot-note">War list — generated &amp; controlled by the master; visible to the faction only when activated.</span>
+    </footer>
+  </div><!-- /#view-war -->
 </div>
 
 <div id="toast" role="status"></div>
@@ -369,6 +436,16 @@
   let syncing = false;
   let mayRemove = false;   // set by the server (caller's faction position); gates the delete button
   let syncCount = 0;       // outstanding background operations (drives the syncing badge)
+
+  // ---- War list (second view) ----
+  let activeView = 'hitlist';               // 'hitlist' | 'war'
+  let isMaster = false;                     // server-confirmed: only TheG3ISTY may edit/activate the war list
+  let warList = [];
+  let warActive = false;                    // is the war list visible to the whole faction?
+  let warFactionId = 0;
+  let warFactionName = '';
+  let warSort = { col:'stat', dir:'asc' };  // softest first, like the hit list
+  let warFilterText = '';
   const statusById = new Map();   // id -> { state, color, description, until, at } — live Torn status (ephemeral, not shared)
   const statusInFlight = new Set();
 
@@ -432,7 +509,10 @@
   /* ===================== Shared list (Google Sheet backend) ===================== */
   function setSync(on){ syncCount = Math.max(0, syncCount + (on ? 1 : -1)); syncing = syncCount > 0; const b = $('#sync-badge'); if(b) b.hidden = !syncing; }
   // The server reports (per your faction position) whether you may remove targets.
-  function noteRole(data){ if(data && typeof data.mayRemove === 'boolean'){ mayRemove = data.mayRemove; lsSet(LS.mayRemove, mayRemove ? '1' : '0'); } }
+  function noteRole(data){
+    if(data && typeof data.mayRemove === 'boolean'){ mayRemove = data.mayRemove; lsSet(LS.mayRemove, mayRemove ? '1' : '0'); }
+    if(data && typeof data.isMaster === 'boolean'){ isMaster = data.isMaster; updateTabs(); }
+  }
 
   // POST an action to the Apps Script web app. The body is sent as text/plain so the
   // browser makes a "simple" request (no CORS preflight, which Apps Script can't answer).
@@ -557,6 +637,7 @@
     $('#whoami').textContent = who ? ('✓ Verified: ' + who) : '✓ Verified';
     render();                 // show cached list instantly
     await syncList();         // then pull the latest shared list from the Sheet
+    syncWar();                // and the war list / master status (background)
   }
   function logout(){
     // Clears the stored key + verified flag and returns to the gate. Keeps the target list & settings.
@@ -615,7 +696,7 @@
             ? { state: s.state || '?', color: s.color || '', description: s.description || '', until: s.until || 0, at: Date.now() }
             : { state: '?', color: '', description: '', until: 0, at: Date.now() });
         } catch(e){ /* keep any prior status; one failure shouldn't abort the batch */ }
-        render();
+        render(); renderWar();
       }
     } finally {
       todo.forEach(id => statusInFlight.delete(id));
@@ -650,6 +731,21 @@
       throw tagged('shape', { sample: text.slice(0,180) });
     }
     return data;
+  }
+
+  // Fetch stats for many ids: auto-chunked and spaced to respect the 20/min limit.
+  // Returns the combined array of FFScouter objects (throws a tagged error on failure).
+  async function fetchAllStats(ids, onProgress){
+    const chunks = [];
+    for(let i = 0; i < ids.length; i += CHUNK_SIZE) chunks.push(ids.slice(i, i + CHUNK_SIZE));
+    let combined = [];
+    for(let i = 0; i < chunks.length; i++){
+      if(i > 0) await sleep(CHUNK_SPACING_MS);                 // space chunks to respect 20/min
+      if(chunks.length > 1 && onProgress) onProgress(`Fetching batch ${i+1} / ${chunks.length}…`);
+      await rateGate();
+      combined = combined.concat(await fetchChunk(chunks[i]));
+    }
+    return combined;
   }
 
   function errToMsg(err){
@@ -716,17 +812,9 @@
 
     setUpdating(true);
     setUpdateStatus('Fetching estimates…');
-    const chunks = [];
-    for(let i = 0; i < ids.length; i += CHUNK_SIZE) chunks.push(ids.slice(i, i + CHUNK_SIZE));
-
-    let combined = [];
+    let combined;
     try {
-      for(let i = 0; i < chunks.length; i++){
-        if(i > 0) await sleep(CHUNK_SPACING_MS);                 // space chunks to respect 20/min
-        if(chunks.length > 1) setUpdateStatus(`Fetching batch ${i+1} / ${chunks.length}…`);
-        await rateGate();
-        combined = combined.concat(await fetchChunk(chunks[i]));
-      }
+      combined = await fetchAllStats(ids, setUpdateStatus);
     } catch(err){
       setUpdating(false);
       handleStatsError(err);
@@ -787,8 +875,8 @@
 
   /* ===================== Sorting ===================== */
   function tieName(a,b){ return a.name.localeCompare(b.name, undefined, { numeric:true, sensitivity:'base' }); }
-  function sortList(list){
-    const { col, dir } = sort, s = dir === 'asc' ? 1 : -1;
+  function sortList(list, srt){
+    const { col, dir } = srt || sort, s = dir === 'asc' ? 1 : -1;
     return list.slice().sort((a,b) => {
       if(col === 'stat'){
         const an = a.statEstimate == null, bn = b.statEstimate == null;
@@ -813,7 +901,7 @@
     render();
   }
   function updateSortIndicators(){
-    document.querySelectorAll('th[data-sort]').forEach(th => {
+    document.querySelectorAll('#view-hitlist th[data-sort]').forEach(th => {
       const ind = th.querySelector('.sort-ind'); if(!ind) return;
       if(th.dataset.sort === sort.col){ ind.textContent = sort.dir === 'asc' ? '▲' : '▼'; th.classList.add('sorted'); }
       else { ind.textContent = ''; th.classList.remove('sorted'); }
@@ -920,7 +1008,7 @@
     const ft = filterText.trim().toLowerCase();
     let list = targets;
     if(ft) list = list.filter(t => t.name.toLowerCase().includes(ft) || (t.why || '').toLowerCase().includes(ft));
-    list = sortList(list);
+    list = sortList(list, sort);
 
     $('#count').textContent = targets.length + (targets.length === 1 ? ' target' : ' targets') + (ft ? ` (${list.length} shown)` : '');
 
@@ -947,7 +1035,289 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  function setHuman(on){ displayHuman = !!on; lsSet(LS.human, on ? '1' : '0'); render(); }
+  function setHuman(on){
+    displayHuman = !!on; lsSet(LS.human, on ? '1' : '0');
+    const a = $('#human-toggle'), b = $('#war-human-toggle');
+    if(a) a.checked = displayHuman; if(b) b.checked = displayHuman;
+    render(); renderWar();
+  }
+
+  /* ===================== War list (master-controlled second view) ===================== */
+  function normalizeWar(o){
+    if(!o || typeof o !== 'object') return null;
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if(!name) return null;
+    const stat = (typeof o.statEstimate === 'number' && isFinite(o.statEstimate)) ? o.statEstimate : null;
+    return {
+      name,
+      position: typeof o.position === 'string' ? o.position : '',
+      level: (typeof o.level === 'number' && isFinite(o.level)) ? o.level : null,
+      status: typeof o.status === 'string' ? o.status : '',
+      statEstimate: stat,
+      statHuman: typeof o.statHuman === 'string' ? o.statHuman : null,
+      checkedAt: typeof o.checkedAt === 'string' ? o.checkedAt : null,
+    };
+  }
+  function applyWarState(data){
+    if(!data) return;
+    if(typeof data.active === 'boolean') warActive = data.active;
+    if(typeof data.factionId !== 'undefined') warFactionId = Number(data.factionId) || 0;
+    if(typeof data.factionName === 'string') warFactionName = data.factionName;
+    if(Array.isArray(data.war)) warList = data.war.map(normalizeWar).filter(Boolean);
+    updateTabs();
+    renderWar();
+  }
+  // Pull war status/roster from the backend. Everyone learns whether it's active;
+  // the roster itself only comes back if it's active OR you're the master.
+  async function syncWar(){
+    setSync(true);
+    try {
+      const data = await sheetCall('warStatus');
+      noteRole(data);
+      if(data.ok){
+        applyWarState(data);
+        if(warActive || isMaster) refreshStatuses(warList.map(w => extractId(w.name)).filter(x => x != null));
+      }
+    } catch(err){
+      /* war status is best-effort; don't nag on transient network blips */
+    } finally { setSync(false); }
+  }
+  function warErrMsg(code, detail){
+    return ({
+      bad_faction: 'Enter a valid numeric faction ID.',
+      torn_error:  'Torn rejected the faction lookup' + (detail ? (' — ' + detail) : '') + '.',
+      torn_parse:  'Torn returned unreadable data for that faction.',
+      forbidden:   'Only the war-list master can do that.',
+    })[code] || ('War list error: ' + code + '.');
+  }
+
+  function switchView(view){
+    activeView = view;
+    $('#view-hitlist').hidden = view !== 'hitlist';
+    $('#view-war').hidden = view !== 'war';
+    $('#tab-hitlist').classList.toggle('active', view === 'hitlist');
+    $('#tab-war').classList.toggle('active', view === 'war');
+    if(view === 'war') renderWar(); else render();
+  }
+  // Reflect master/active state into the tab bar and master controls.
+  function updateTabs(){
+    const show = isMaster || warActive;
+    const warTab = $('#tab-war'); if(warTab) warTab.hidden = !show;
+    const mc = $('#war-master-controls'); if(mc) mc.hidden = !isMaster;
+    const ab = $('#war-activate-btn');
+    if(ab){
+      ab.textContent = warActive ? 'Deactivate (hide from faction)' : 'Activate for faction';
+      ab.classList.toggle('btn-ghost-danger', warActive);
+    }
+    const who = $('#whoami');
+    if(who && isMaster && !/👑/.test(who.textContent)) who.textContent += ' · 👑 War master';
+    if(activeView === 'war' && !show) switchView('hitlist');   // lost access -> bounce back
+    updateWarInfo();
+  }
+  function updateWarInfo(){
+    const info = $('#war-info'), txt = $('#war-info-text'), pill = $('#war-active-pill');
+    if(!info) return;
+    if(warFactionId){
+      info.hidden = false;
+      txt.textContent = '⚔️ ' + (warFactionName || ('Faction ' + warFactionId)) + ' [' + warFactionId + '] · '
+        + warList.length + (warList.length === 1 ? ' member' : ' members');
+      if(warActive){ pill.textContent = '● Live to faction'; pill.style.color = 'var(--ok)'; }
+      else if(isMaster){ pill.textContent = '○ Draft — only you can see this'; pill.style.color = 'var(--warn)'; }
+      else pill.textContent = '';
+    } else {
+      info.hidden = true;
+    }
+  }
+
+  function setWarStatusMsg(s){ const el = $('#war-status-msg'); if(el) el.textContent = s || ''; }
+  function setWarBusy(on, msg){
+    const b = $('#war-gen-btn');
+    if(b){ b.disabled = on; b.textContent = on ? 'Generating…' : '⚔️ Generate'; }
+    if(msg !== undefined) setWarStatusMsg(msg);
+  }
+  function warStatsError(err){ const m = errToMsg(err); setWarStatusMsg(m); toast(m, 'err'); }
+
+  // MASTER: pull the enemy faction roster, then (default) fetch stats in the same pass.
+  async function generateWar(){
+    if(!isMaster) return;
+    const fid = parseInt(($('#war-faction-input').value || '').trim(), 10);
+    if(!fid){ setWarStatusMsg('Enter a numeric faction ID.'); return; }
+    setWarBusy(true, 'Fetching faction roster from Torn…');
+    setSync(true);
+    let data;
+    try { data = await sheetCall('warGenerate', { factionId: fid }); }
+    catch(err){ setWarBusy(false, ''); setSync(false); handleSheetError(err, 'War generation failed.'); return; }
+    setSync(false);
+    noteRole(data);
+    if(!data.ok){ setWarBusy(false, ''); toast(warErrMsg(data.error, data.detail), 'err'); return; }
+    applyWarState(data);
+    $('#war-faction-input').value = '';
+    toast('Pulled ' + warList.length + ' members from ' + warFactionName + '. Fetching stats…', 'ok');
+    await updateWarStats();                                   // roster + stats together (chosen default)
+    setWarBusy(false, 'Generated ' + warList.length + ' members · ' + fmtNow());
+  }
+  // MASTER: fetch battle-stat estimates for the whole war roster, save to the War tab.
+  async function updateWarStats(){
+    if(!isMaster) return;
+    if(!statsKey()){ toast('No verified key found — log out and sign in again.', 'err'); return; }
+    const ids = [...new Set(warList.map(w => extractId(w.name)).filter(x => x != null))];
+    if(ids.length === 0){ setWarStatusMsg('No war targets to update.'); return; }
+    setWarStatusMsg('Fetching estimates…');
+    let combined;
+    try { combined = await fetchAllStats(ids, setWarStatusMsg); }
+    catch(err){ warStatsError(err); return; }
+    const byId = new Map(combined.filter(o => o && o.player_id != null).map(o => [Number(o.player_id), o]));
+    const now = fmtNow();
+    const stats = ids.filter(id => byId.has(id)).map(id => toStatEntry(id, byId.get(id), now));
+    setWarStatusMsg('Saving to the war list…');
+    setSync(true);
+    let data;
+    try { data = await sheetCall('warSetStats', { stats }); }
+    catch(err){ setSync(false); warStatsError(err); return; }
+    setSync(false);
+    noteRole(data);
+    if(data.ok && Array.isArray(data.war)){ warList = data.war.map(normalizeWar).filter(Boolean); renderWar(); updateWarInfo(); }
+    refreshStatuses(ids);
+    setWarStatusMsg('Updated ' + stats.length + ' of ' + ids.length + ' · ' + now);
+    toast('War stats updated for ' + stats.length + ' member' + (stats.length === 1 ? '' : 's') + '.', 'ok');
+  }
+  // MASTER: flip faction-wide visibility.
+  async function toggleWarActive(){
+    if(!isMaster) return;
+    const want = !warActive;
+    if(!want && !confirm('Hide the war list from the faction again? Only you will see it.')) return;
+    setSync(true);
+    let data;
+    try { data = await sheetCall(want ? 'warActivate' : 'warDeactivate'); }
+    catch(err){ setSync(false); handleSheetError(err); return; }
+    setSync(false);
+    noteRole(data);
+    if(!data.ok){ toast(warErrMsg(data.error), 'err'); return; }
+    applyWarState(data);
+    toast(want ? 'War list is now visible to the whole faction.' : 'War list hidden — only you can see it now.', want ? 'ok' : 'warn');
+  }
+  // MASTER: wipe the war list entirely.
+  async function clearWar(){
+    if(!isMaster) return;
+    if(!confirm('Clear the war list entirely? This removes the roster for everyone.')) return;
+    setSync(true);
+    let data;
+    try { data = await sheetCall('warClear'); }
+    catch(err){ setSync(false); handleSheetError(err); return; }
+    setSync(false);
+    noteRole(data);
+    applyWarState(data);
+    setWarStatusMsg('');
+    toast('War list cleared.', 'ok');
+  }
+
+  /* ---- War rendering ---- */
+  function buildWarRow(w){
+    const id = extractId(w.name);
+    const tr = document.createElement('tr');
+
+    // Name (read-only) + id chip
+    const tdName = document.createElement('td'); tdName.className = 'c-name';
+    const nm = document.createElement('span'); nm.textContent = w.name.replace(/\s*\[\d+\]\s*$/, '');
+    tdName.appendChild(nm);
+    if(id != null){ const chip = document.createElement('span'); chip.className = 'id-chip'; chip.textContent = '#' + id; tdName.appendChild(chip); }
+    tr.appendChild(tdName);
+
+    // Position
+    const tdPos = document.createElement('td');
+    if(w.position){ tdPos.textContent = w.position; } else { tdPos.textContent = '—'; tdPos.className = 'na'; }
+    tr.appendChild(tdPos);
+
+    // Level
+    const tdLvl = document.createElement('td'); tdLvl.className = 'c-stat';
+    if(w.level != null){ tdLvl.textContent = 'Lv ' + w.level; } else { tdLvl.textContent = '—'; tdLvl.classList.add('na'); }
+    tr.appendChild(tdLvl);
+
+    // Stat estimate
+    const tdStat = document.createElement('td'); tdStat.className = 'c-stat';
+    const statSpan = document.createElement('span');
+    statSpan.textContent = fmtStat(w);
+    if(w.statEstimate == null) statSpan.classList.add('na');
+    else statSpan.title = displayHuman ? Number(w.statEstimate).toLocaleString('en-US') : (w.statHuman ? ('≈ ' + w.statHuman) : '');
+    tdStat.appendChild(statSpan);
+    tr.appendChild(tdStat);
+
+    // Checked when
+    const tdChk = document.createElement('td'); tdChk.className = 'c-checked';
+    const cs = document.createElement('span'); cs.textContent = w.checkedAt || '—'; if(!w.checkedAt) cs.classList.add('na');
+    tdChk.appendChild(cs);
+    tr.appendChild(tdChk);
+
+    // Live Torn status
+    const st = (id != null) ? statusById.get(id) : null;
+    const tdStatus = document.createElement('td'); tdStatus.className = 'c-status';
+    if(st){
+      const dot = document.createElement('span'); dot.className = 'st-dot st-' + (st.color || 'gray');
+      const lbl = document.createElement('span'); lbl.textContent = statusLabel(st);
+      tdStatus.appendChild(dot); tdStatus.appendChild(lbl);
+      tdStatus.title = (st.description || st.state || '') + (st.at ? (' — as of ' + fmtClock(st.at)) : '');
+    } else {
+      const dash = document.createElement('span'); dash.className = 'na'; dash.textContent = '—'; tdStatus.appendChild(dash);
+    }
+    tr.appendChild(tdStatus);
+
+    // Profile / Attack links
+    const tdProf = document.createElement('td'); tdProf.className = 'c-link';
+    tdProf.appendChild(linkEl(id != null ? ('https://www.torn.com/profiles.php?XID=' + id) : null, 'Profile', 'link-profile'));
+    tr.appendChild(tdProf);
+
+    const tdAtk = document.createElement('td'); tdAtk.className = 'c-link';
+    const atk = linkEl(id != null ? ('https://www.torn.com/page.php?sid=attack&user2ID=' + id) : null, 'Attack', 'link-attack');
+    if(id != null && st && st.state && st.state !== 'Okay' && st.state !== '?'){
+      atk.classList.add('attack-warn');
+      atk.textContent = '⚠ Attack';
+      atk.title = 'Target is ' + statusLabel(st) + ' — may not be attackable (as of ' + fmtClock(st.at) + ')';
+    }
+    tdAtk.appendChild(atk);
+    tr.appendChild(tdAtk);
+
+    return tr;
+  }
+  function updateWarSortIndicators(){
+    document.querySelectorAll('#view-war th[data-sort]').forEach(th => {
+      const ind = th.querySelector('.sort-ind'); if(!ind) return;
+      if(th.dataset.sort === warSort.col){ ind.textContent = warSort.dir === 'asc' ? '▲' : '▼'; th.classList.add('sorted'); }
+      else { ind.textContent = ''; th.classList.remove('sorted'); }
+    });
+  }
+  function setWarSort(col){
+    if(warSort.col === col) warSort.dir = warSort.dir === 'asc' ? 'desc' : 'asc';
+    else { warSort.col = col; warSort.dir = 'asc'; }
+    renderWar();
+  }
+  function renderWar(){
+    const tbody = $('#war-tbody'); if(!tbody) return;
+    updateWarSortIndicators();
+    tbody.innerHTML = '';
+    const ft = warFilterText.trim().toLowerCase();
+    let list = warList;
+    if(ft) list = list.filter(w => w.name.toLowerCase().includes(ft) || (w.position || '').toLowerCase().includes(ft));
+    list = sortList(list, warSort);
+
+    const cnt = $('#war-count');
+    if(cnt) cnt.textContent = warList.length + (warList.length === 1 ? ' member' : ' members') + (ft ? ` (${list.length} shown)` : '');
+    updateWarInfo();
+
+    if(list.length === 0){
+      const tr = document.createElement('tr'); tr.className = 'empty-row';
+      const td = document.createElement('td'); td.colSpan = 8;
+      td.textContent = warFactionId
+        ? 'No members match your filter.'
+        : (isMaster
+            ? 'No war list yet. Enter an enemy faction ID above and hit Generate — you’ll see it before anyone else does.'
+            : 'The war list isn’t active right now.');
+      tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for(const w of list) frag.appendChild(buildWarRow(w));
+    tbody.appendChild(frag);
+  }
 
   /* ===================== Init ===================== */
   function init(){
@@ -968,13 +1338,28 @@
     $('#export-btn').addEventListener('click', exportJson);
     $('#human-toggle').addEventListener('change', e => setHuman(e.target.checked));
     $('#filter-input').addEventListener('input', e => { filterText = e.target.value; render(); });
-    // Re-pull the shared list when returning to the tab (debounced), so you see others' changes.
-    let focusT = 0;
-    window.addEventListener('focus', () => { if(!$('#app').hidden && Date.now() - focusT > 8000){ focusT = Date.now(); syncList(); } });
 
-    // Sort headers
-    document.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => setSort(th.dataset.sort)));
+    // Tabs
+    $('#tab-hitlist').addEventListener('click', () => switchView('hitlist'));
+    $('#tab-war').addEventListener('click', () => switchView('war'));
+
+    // War controls (master-only actions are also enforced server-side)
+    $('#war-gen-form').addEventListener('submit', e => { e.preventDefault(); generateWar(); });
+    $('#war-update-btn').addEventListener('click', updateWarStats);
+    $('#war-activate-btn').addEventListener('click', toggleWarActive);
+    $('#war-clear-btn').addEventListener('click', clearWar);
+    $('#war-filter-input').addEventListener('input', e => { warFilterText = e.target.value; renderWar(); });
+    $('#war-human-toggle').addEventListener('change', e => setHuman(e.target.checked));
+
+    // Re-pull the shared lists when returning to the tab (debounced), so you see others' changes.
+    let focusT = 0;
+    window.addEventListener('focus', () => { if(!$('#app').hidden && Date.now() - focusT > 8000){ focusT = Date.now(); syncList(); syncWar(); } });
+
+    // Sort headers (each view has its own sort state)
+    document.querySelectorAll('#view-hitlist th[data-sort]').forEach(th => th.addEventListener('click', () => setSort(th.dataset.sort)));
+    document.querySelectorAll('#view-war th[data-sort]').forEach(th => th.addEventListener('click', () => setWarSort(th.dataset.sort)));
     $('#human-toggle').checked = displayHuman;
+    $('#war-human-toggle').checked = displayHuman;
 
     // Initial screen: skip gate only if previously verified.
     if(lsGet(LS.verified) === '1' && (lsGet(LS.key) || '').trim()) unlock();
