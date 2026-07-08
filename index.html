@@ -244,7 +244,9 @@
   }
   .manual-check input{cursor:pointer;margin:0}
   .manual-check:hover{color:var(--text)}
-  .stat-edit{max-width:8.5rem;text-align:right;font-family:var(--mono)}
+  /* Pull the edit box right by its own padding+border so the number right-aligns
+     with the plain-text stat cells above/below it (no more manual-row jog). */
+  .stat-edit{max-width:8.5rem;text-align:right;font-family:var(--mono);margin-right:calc(-0.45rem - 1px)}
   .manual-tag{margin-left:.35rem;color:var(--warn);font-size:.8rem}
 
   .appfoot{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:.9rem;font-size:.8rem;color:var(--faint)}
