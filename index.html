@@ -225,6 +225,28 @@
   .st-gray,.st-{background:var(--faint)}
   .empty-row td{text-align:center;color:var(--muted);padding:2.2rem 1rem !important}
 
+  /* War-list sides: our faction (green) vs the enemy (red) */
+  tr.side-friendly{box-shadow:inset 3px 0 0 var(--ok)}
+  tr.side-enemy{box-shadow:inset 3px 0 0 var(--danger)}
+  tr.side-friendly .name-txt{color:var(--ok)}
+  tr.side-enemy .name-txt{color:#fda4af}
+  .side-tag{
+    display:inline-block;font-family:var(--mono);font-size:.6rem;font-weight:700;letter-spacing:.04em;
+    margin-left:.45rem;padding:.05em .4em;border-radius:5px;vertical-align:middle;
+  }
+  tr.side-friendly .side-tag{color:var(--ok);border:1px solid rgba(52,211,153,.5)}
+  tr.side-enemy .side-tag{color:#fda4af;border:1px solid rgba(251,113,133,.45)}
+
+  /* Manual override: per-row toggle + editable stat */
+  .manual-check{
+    display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;color:var(--muted);
+    cursor:pointer;user-select:none;margin-right:.4rem;vertical-align:middle;white-space:nowrap;
+  }
+  .manual-check input{cursor:pointer;margin:0}
+  .manual-check:hover{color:var(--text)}
+  .stat-edit{max-width:8.5rem;text-align:right;font-family:var(--mono)}
+  .manual-tag{margin-left:.35rem;color:var(--warn);font-size:.8rem}
+
   .appfoot{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:.9rem;font-size:.8rem;color:var(--faint)}
   .count{color:var(--muted)}
 
@@ -365,6 +387,7 @@
           <button class="btn btn-primary" id="war-gen-btn" type="submit">⚔️ Generate</button>
         </form>
         <div class="toolbar">
+          <button class="btn" id="war-friendly-btn" type="button" title="Pull your own faction's roster (shown green) into the war list, then fetch stats">➕ Add my faction</button>
           <button class="btn btn-update" id="war-update-btn" title="Fetch battle-stat estimates for the whole roster">Update Stats</button>
           <button class="btn" id="war-activate-btn">Activate for faction</button>
           <button class="btn btn-ghost-danger" id="war-clear-btn" title="Wipe the war list">Clear</button>
@@ -378,6 +401,7 @@
       <div class="toolbar">
         <span class="spacer"></span>
         <input id="war-filter-input" class="input input-filter" placeholder="Filter…" spellcheck="false">
+        <label class="checkline"><input type="checkbox" id="war-friendly-toggle" checked> Show my faction</label>
         <label class="checkline"><input type="checkbox" id="war-human-toggle"> Human-readable</label>
       </div>
     </section>
@@ -433,6 +457,7 @@
     targets:'bk_hitlist_targets',
     human:'bk_hitlist_human', sort:'bk_hitlist_sort', mayRemove:'bk_hitlist_may_remove',
     statsKeyOverride:'bk_hitlist_stats_key',   // optional FFScouter key (if it differs from the Torn login key)
+    warShowFriendly:'bk_war_show_friendly',    // war view: show our own faction (green) rows
   };
 
   /* ===================== State ===================== */
@@ -454,6 +479,7 @@
   let warFactionName = '';
   let warSort = { col:'stat', dir:'asc' };  // softest first, like the hit list
   let warFilterText = '';
+  let warShowFriendly = true;               // war view: include our own faction (green) rows
   const statusById = new Map();   // id -> { state, color, description, until, at } — live Torn status (ephemeral, not shared)
   const statusInFlight = new Set();
 
@@ -496,6 +522,7 @@
       statEstimate: stat,
       statHuman: typeof o.statHuman === 'string' ? o.statHuman : null,
       checkedAt: typeof o.checkedAt === 'string' ? o.checkedAt : null,
+      manual: !!o.manual,
     };
   }
   function exportTarget(t){
@@ -505,6 +532,7 @@
       statEstimate: (typeof t.statEstimate === 'number') ? t.statEstimate : null,
       statHuman: t.statHuman || null,
       checkedAt: t.checkedAt || null,
+      manual: !!t.manual,
     };
   }
   function loadTargets(){
@@ -602,6 +630,27 @@
     if(t.statEstimate == null) return 'N/A';
     if(displayHuman && t.statHuman) return t.statHuman;
     return Number(t.statEstimate).toLocaleString('en-US');
+  }
+  // Parse a hand-typed stat: accepts plain numbers, thousands separators, and
+  // k/m/b suffixes (e.g. "2.1b", "350m", "1,200,000"). Returns a rounded integer or null.
+  function parseStatInput(v){
+    v = String(v == null ? '' : v).trim().toLowerCase().replace(/,/g,'');
+    if(!v) return null;
+    const m = /^([\d.]+)\s*([kmb])?$/.exec(v);
+    if(!m){ const n = Number(v); return isFinite(n) ? Math.round(n) : null; }
+    let n = parseFloat(m[1]); if(!isFinite(n)) return null;
+    const suf = m[2];
+    if(suf === 'k') n *= 1e3; else if(suf === 'm') n *= 1e6; else if(suf === 'b') n *= 1e9;
+    return Math.round(n);
+  }
+  // Compact human-readable form for a manually entered stat (so the Human-readable toggle still reads well).
+  function humanStat(n){
+    if(n == null || !isFinite(n)) return null;
+    const a = Math.abs(n);
+    if(a >= 1e9) return (n/1e9).toFixed(2).replace(/\.?0+$/,'') + 'b';
+    if(a >= 1e6) return (n/1e6).toFixed(2).replace(/\.?0+$/,'') + 'm';
+    if(a >= 1e3) return (n/1e3).toFixed(1).replace(/\.?0+$/,'') + 'k';
+    return String(n);
   }
 
   /* ===================== Access gate ===================== */
@@ -775,7 +824,7 @@
   // Refresh ONE target: a single request for a single ID, still governed by the
   // shared 20/min rate limiter. (Batched "Global Refresh" is cheaper per target.)
   async function refreshOne(t){
-    if(t._busy) return;
+    if(t._busy || t.manual) return;   // manual-override rows are never auto-fetched
     const id = extractId(t.name);
     if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
     if(!statsKey()){ toast('No verified key found — log out and sign in again.', 'err'); return; }
@@ -818,7 +867,7 @@
   async function updateStats(){
     if(cooling) return;
     if(!statsKey()){ toast('No verified key found — log out and sign in again.', 'err'); return; }
-    const ids = [...new Set(targets.map(t => extractId(t.name)).filter(x => x != null))];
+    const ids = [...new Set(targets.filter(t => !t.manual).map(t => extractId(t.name)).filter(x => x != null))];
     if(ids.length === 0){ toast('No valid targets to update.', 'warn'); return; }
 
     setUpdating(true);
@@ -927,6 +976,43 @@
     a.className = 'row-link ' + (cls || ''); a.textContent = label;
     return a;
   }
+  // A number input for a manual-override stat. onSave(rawValue) fires on Enter/blur.
+  function manualStatInput(row, onSave){
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.className = 'cell-input stat-edit'; inp.inputMode = 'decimal';
+    inp.value = (row.statEstimate == null) ? '' : String(row.statEstimate);
+    inp.placeholder = 'e.g. 2.1b'; inp.spellcheck = false;
+    inp.setAttribute('aria-label', 'Manual stat estimate');
+    inp.title = 'Hand-entered stat (excluded from refreshes)';
+    inp.addEventListener('change', () => onSave(inp.value));
+    inp.addEventListener('keydown', e => { if(e.key === 'Enter') inp.blur(); });
+    return inp;
+  }
+  // A "Manual" checkbox label. onToggle(checked) fires on change.
+  function manualToggle(row, onToggle){
+    const lbl = document.createElement('label');
+    lbl.className = 'manual-check';
+    lbl.title = 'Manual override: hand-enter the stat and exclude this row from refreshes';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !!row.manual;
+    cb.addEventListener('change', () => onToggle(cb.checked));
+    lbl.appendChild(cb); lbl.appendChild(document.createTextNode('Manual'));
+    return lbl;
+  }
+  // Toggle a hit-list target's manual override (open to any verified member, like Refresh/Add).
+  async function setManual(t, on){
+    const id = extractId(t.name);
+    if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
+    t.manual = on; render();
+    await mutate('setManual', { id: String(id), manual: on });
+  }
+  // Save a hand-entered stat for a hit-list target (implies manual override on).
+  async function saveManualStat(t, raw){
+    const id = extractId(t.name);
+    if(id == null) return;
+    const num = parseStatInput(raw);
+    await mutate('setManual', { id: String(id), manual: true, statEstimate: num, statHuman: humanStat(num), checkedAt: 'manual · ' + fmtNow() });
+  }
   function buildRow(t){
     const id = extractId(t.name);   // derived links are generated from id, never stored
     const tr = document.createElement('tr');
@@ -951,13 +1037,17 @@
     tdWhy.appendChild(whyIn);
     tr.appendChild(tdWhy);
 
-    // Stat estimate
+    // Stat estimate (hand-editable when Manual override is on)
     const tdStat = document.createElement('td'); tdStat.className = 'c-stat';
-    const statSpan = document.createElement('span');
-    statSpan.textContent = fmtStat(t);
-    if(t.statEstimate == null) statSpan.classList.add('na');
-    else statSpan.title = displayHuman ? Number(t.statEstimate).toLocaleString('en-US') : (t.statHuman ? ('≈ ' + t.statHuman) : '');
-    tdStat.appendChild(statSpan);
+    if(t.manual){
+      tdStat.appendChild(manualStatInput(t, val => saveManualStat(t, val)));
+    } else {
+      const statSpan = document.createElement('span');
+      statSpan.textContent = fmtStat(t);
+      if(t.statEstimate == null) statSpan.classList.add('na');
+      else statSpan.title = displayHuman ? Number(t.statEstimate).toLocaleString('en-US') : (t.statHuman ? ('≈ ' + t.statHuman) : '');
+      tdStat.appendChild(statSpan);
+    }
     tr.appendChild(tdStat);
 
     // Checked when
@@ -994,15 +1084,18 @@
     tdAtk.appendChild(atk);
     tr.appendChild(tdAtk);
 
-    // Refresh (this target only) + Delete
+    // Manual override + Refresh (this target only) + Delete
     const tdAct = document.createElement('td'); tdAct.className = 'c-act';
-    const ref = document.createElement('button');
-    ref.className = 'btn btn-small row-refresh';
-    ref.textContent = t._busy ? '…' : 'Refresh';
-    ref.disabled = !!t._busy;
-    ref.title = 'Refresh just this target (1 API request)';
-    ref.addEventListener('click', () => refreshOne(t));
-    tdAct.appendChild(ref);
+    tdAct.appendChild(manualToggle(t, on => setManual(t, on)));
+    if(!t.manual){   // manual rows are excluded from refreshes, so no per-row Refresh
+      const ref = document.createElement('button');
+      ref.className = 'btn btn-small row-refresh';
+      ref.textContent = t._busy ? '…' : 'Refresh';
+      ref.disabled = !!t._busy;
+      ref.title = 'Refresh just this target (1 API request)';
+      ref.addEventListener('click', () => refreshOne(t));
+      tdAct.appendChild(ref);
+    }
     if(mayRemove){   // only shown to Boykisser / Dommy Mommy / Leader / Co-Leader (enforced server-side too)
       const del = document.createElement('button');
       del.className = 'icon-btn danger'; del.title = 'Remove target'; del.setAttribute('aria-label', 'Remove target'); del.textContent = '✕';
@@ -1067,6 +1160,8 @@
       statEstimate: stat,
       statHuman: typeof o.statHuman === 'string' ? o.statHuman : null,
       checkedAt: typeof o.checkedAt === 'string' ? o.checkedAt : null,
+      side: o.side === 'friendly' ? 'friendly' : 'enemy',
+      manual: !!o.manual,
     };
   }
   function applyWarState(data){
@@ -1129,8 +1224,10 @@
     if(!info) return;
     if(warFactionId){
       info.hidden = false;
+      const enemyN = warList.filter(w => w.side !== 'friendly').length;
+      const friendlyN = warList.length - enemyN;
       txt.textContent = '⚔️ ' + (warFactionName || ('Faction ' + warFactionId)) + ' [' + warFactionId + '] · '
-        + warList.length + (warList.length === 1 ? ' member' : ' members');
+        + enemyN + ' enemy' + (friendlyN ? (' · ' + friendlyN + ' us') : '');
       if(warActive){ pill.textContent = '● Live to faction'; pill.style.color = 'var(--ok)'; }
       else if(isMaster){ pill.textContent = '○ Draft — only you can see this'; pill.style.color = 'var(--warn)'; }
       else pill.textContent = '';
@@ -1182,7 +1279,7 @@
   async function updateWarStats(){
     if(!isMaster) return;
     if(!statsKey()){ toast('No verified key found — log out and sign in again.', 'err'); return; }
-    const ids = [...new Set(warList.map(w => extractId(w.name)).filter(x => x != null))];
+    const ids = [...new Set(warList.filter(w => !w.manual).map(w => extractId(w.name)).filter(x => x != null))];
     if(ids.length === 0){ setWarStatusMsg('No war targets to update.'); return; }
     setWarStatusMsg('Fetching estimates…');
     let combined;
@@ -1236,12 +1333,16 @@
   /* ---- War rendering ---- */
   function buildWarRow(w){
     const id = extractId(w.name);
+    const friendly = w.side === 'friendly';
     const tr = document.createElement('tr');
+    tr.className = friendly ? 'side-friendly' : 'side-enemy';   // green (us) / red (them)
 
-    // Name (read-only) + id chip
+    // Name (read-only) + side tag + id chip
     const tdName = document.createElement('td'); tdName.className = 'c-name';
-    const nm = document.createElement('span'); nm.textContent = w.name.replace(/\s*\[\d+\]\s*$/, '');
+    const nm = document.createElement('span'); nm.className = 'name-txt'; nm.textContent = w.name.replace(/\s*\[\d+\]\s*$/, '');
     tdName.appendChild(nm);
+    const tag = document.createElement('span'); tag.className = 'side-tag'; tag.textContent = friendly ? 'US' : 'ENEMY';
+    tdName.appendChild(tag);
     if(id != null){ const chip = document.createElement('span'); chip.className = 'id-chip'; chip.textContent = '#' + id; tdName.appendChild(chip); }
     tr.appendChild(tdName);
 
@@ -1255,13 +1356,18 @@
     if(w.level != null){ tdLvl.textContent = 'Lv ' + w.level; } else { tdLvl.textContent = '—'; tdLvl.classList.add('na'); }
     tr.appendChild(tdLvl);
 
-    // Stat estimate
+    // Stat estimate (hand-editable when the master turns on Manual override)
     const tdStat = document.createElement('td'); tdStat.className = 'c-stat';
-    const statSpan = document.createElement('span');
-    statSpan.textContent = fmtStat(w);
-    if(w.statEstimate == null) statSpan.classList.add('na');
-    else statSpan.title = displayHuman ? Number(w.statEstimate).toLocaleString('en-US') : (w.statHuman ? ('≈ ' + w.statHuman) : '');
-    tdStat.appendChild(statSpan);
+    if(w.manual && isMaster){
+      tdStat.appendChild(manualStatInput(w, val => saveWarManualStat(w, val)));
+    } else {
+      const statSpan = document.createElement('span');
+      statSpan.textContent = fmtStat(w);
+      if(w.statEstimate == null) statSpan.classList.add('na');
+      else statSpan.title = displayHuman ? Number(w.statEstimate).toLocaleString('en-US') : (w.statHuman ? ('≈ ' + w.statHuman) : '');
+      tdStat.appendChild(statSpan);
+      if(w.manual){ const mt = document.createElement('span'); mt.className = 'manual-tag'; mt.textContent = '✎'; mt.title = 'Manually entered'; tdStat.appendChild(mt); }
+    }
     tr.appendChild(tdStat);
 
     // Checked when
@@ -1298,16 +1404,19 @@
     tdAtk.appendChild(atk);
     tr.appendChild(tdAtk);
 
-    // Per-row Refresh (master only) — one API request for this member, like the hit list.
+    // Manual override + per-row Refresh (master only) — one API request per member, like the hit list.
     const tdAct = document.createElement('td'); tdAct.className = 'c-act';
     if(isMaster){
-      const ref = document.createElement('button');
-      ref.className = 'btn btn-small row-refresh';
-      ref.textContent = w._busy ? '…' : 'Refresh';
-      ref.disabled = !!w._busy;
-      ref.title = 'Refresh just this member (1 API request)';
-      ref.addEventListener('click', () => refreshWarOne(w));
-      tdAct.appendChild(ref);
+      tdAct.appendChild(manualToggle(w, on => setWarManual(w, on)));
+      if(!w.manual){   // manual rows are excluded from refreshes
+        const ref = document.createElement('button');
+        ref.className = 'btn btn-small row-refresh';
+        ref.textContent = w._busy ? '…' : 'Refresh';
+        ref.disabled = !!w._busy;
+        ref.title = 'Refresh just this member (1 API request)';
+        ref.addEventListener('click', () => refreshWarOne(w));
+        tdAct.appendChild(ref);
+      }
     }
     tr.appendChild(tdAct);
 
@@ -1315,7 +1424,7 @@
   }
   // MASTER: refresh a single war member's stats (one FFScouter request), save to the War tab.
   async function refreshWarOne(w){
-    if(!isMaster || w._busy) return;
+    if(!isMaster || w._busy || w.manual) return;   // manual-override rows are never auto-fetched
     const id = extractId(w.name);
     if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
     if(!statsKey()){ toast('No verified key found — log out and sign in again.', 'err'); return; }
@@ -1335,6 +1444,57 @@
       delete w._busy; renderWar();
     }
   }
+  // MASTER: pull our own faction's roster (green side) and merge it into the war list,
+  // then fetch stats so both sides can be compared. Enemy side is left intact.
+  async function pullFriendly(){
+    if(!isMaster) return;
+    const btn = $('#war-friendly-btn');
+    if(btn){ btn.disabled = true; btn.textContent = 'Adding…'; }
+    setSync(true);
+    let data;
+    try { data = await sheetCall('warPullFriendly'); }
+    catch(err){ setSync(false); if(btn){ btn.disabled = false; btn.textContent = '➕ Add my faction'; } handleSheetError(err, 'Couldn’t pull your faction.'); return; }
+    setSync(false);
+    noteRole(data);
+    if(btn){ btn.disabled = false; btn.textContent = '➕ Add my faction'; }
+    if(!data.ok){ toast(warErrMsg(data.error, data.detail), 'err'); return; }
+    applyWarState(data);
+    const n = warList.filter(w => w.side === 'friendly').length;
+    warShowFriendly = true; lsSet(LS.warShowFriendly, '1');
+    const tog = $('#war-friendly-toggle'); if(tog) tog.checked = true;
+    toast('Added your faction (' + n + ' member' + (n === 1 ? '' : 's') + '). Fetching stats…', 'ok');
+    await updateWarStats();
+  }
+  // MASTER: toggle a war member's manual override.
+  async function setWarManual(w, on){
+    if(!isMaster) return;
+    const id = extractId(w.name);
+    if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
+    w.manual = on; renderWar();
+    setSync(true);
+    try {
+      const data = await sheetCall('warSetManual', { id: String(id), manual: on });
+      noteRole(data);
+      if(data.ok && Array.isArray(data.war)){ warList = data.war.map(normalizeWar).filter(Boolean); renderWar(); }
+      else if(!data.ok) toast(warErrMsg(data.error), 'err');
+    } catch(err){ toast(errToMsg(err), 'err'); }
+    finally { setSync(false); }
+  }
+  // MASTER: save a hand-entered stat for a war member (implies manual override on).
+  async function saveWarManualStat(w, raw){
+    if(!isMaster) return;
+    const id = extractId(w.name);
+    if(id == null) return;
+    const num = parseStatInput(raw);
+    setSync(true);
+    try {
+      const data = await sheetCall('warSetManual', { id: String(id), manual: true, statEstimate: num, statHuman: humanStat(num), checkedAt: 'manual · ' + fmtNow() });
+      noteRole(data);
+      if(data.ok && Array.isArray(data.war)){ warList = data.war.map(normalizeWar).filter(Boolean); renderWar(); }
+      else if(!data.ok) toast(warErrMsg(data.error), 'err');
+    } catch(err){ toast(errToMsg(err), 'err'); }
+    finally { setSync(false); }
+  }
   function updateWarSortIndicators(){
     document.querySelectorAll('#view-war th[data-sort]').forEach(th => {
       const ind = th.querySelector('.sort-ind'); if(!ind) return;
@@ -1353,11 +1513,18 @@
     tbody.innerHTML = '';
     const ft = warFilterText.trim().toLowerCase();
     let list = warList;
+    if(!warShowFriendly) list = list.filter(w => w.side !== 'friendly');   // Hide/Unhide our own faction
     if(ft) list = list.filter(w => w.name.toLowerCase().includes(ft) || (w.position || '').toLowerCase().includes(ft));
     list = sortList(list, warSort);
 
+    const enemyN = warList.filter(w => w.side !== 'friendly').length;
+    const friendlyN = warList.length - enemyN;
     const cnt = $('#war-count');
-    if(cnt) cnt.textContent = warList.length + (warList.length === 1 ? ' member' : ' members') + (ft ? ` (${list.length} shown)` : '');
+    if(cnt){
+      let base = enemyN + ' enemy' + (friendlyN ? (' · ' + friendlyN + ' us') : '');
+      if(ft || (!warShowFriendly && friendlyN)) base += ` (${list.length} shown)`;
+      cnt.textContent = base;
+    }
     updateWarInfo();
 
     if(list.length === 0){
@@ -1402,10 +1569,14 @@
 
     // War controls (master-only actions are also enforced server-side)
     $('#war-gen-form').addEventListener('submit', e => { e.preventDefault(); generateWar(); });
+    $('#war-friendly-btn').addEventListener('click', pullFriendly);
     $('#war-update-btn').addEventListener('click', updateWarStats);
     $('#war-activate-btn').addEventListener('click', toggleWarActive);
     $('#war-clear-btn').addEventListener('click', clearWar);
     $('#war-filter-input').addEventListener('input', e => { warFilterText = e.target.value; renderWar(); });
+    warShowFriendly = lsGet(LS.warShowFriendly) !== '0';   // default on
+    $('#war-friendly-toggle').checked = warShowFriendly;
+    $('#war-friendly-toggle').addEventListener('change', e => { warShowFriendly = e.target.checked; lsSet(LS.warShowFriendly, warShowFriendly ? '1' : '0'); renderWar(); });
     $('#war-human-toggle').addEventListener('change', e => setHuman(e.target.checked));
     $('#war-ffkey').value = lsGet(LS.statsKeyOverride) || '';
     $('#war-ffkey-save').addEventListener('click', saveFfKey);
