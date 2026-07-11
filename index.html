@@ -132,6 +132,10 @@
   .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:#1a1020}
   .war-pill{font-family:var(--mono);font-weight:700}
 
+  /* ===== Embedded Value Calculator (iframe tab) ===== */
+  .calc-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+  #calc-frame{width:100%;height:calc(100vh - 190px);min-height:620px;border:0;display:block}
+
   /* ===== Gate ===== */
   .gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.2rem}
   .gate-card{
@@ -392,6 +396,7 @@
   <nav class="tabs">
     <button class="tab active" id="tab-hitlist" type="button">🎯 Hit List</button>
     <button class="tab" id="tab-war" type="button">⚔️ War List</button>
+    <button class="tab" id="tab-calc" type="button">💰 Value Calc</button>
   </nav>
 
   <div id="view-hitlist">
@@ -504,6 +509,17 @@
       <span class="foot-note">War list — generated &amp; controlled by the master; visible to the faction only when activated.</span>
     </footer>
   </div><!-- /#view-war -->
+
+  <div id="view-calc" hidden>
+    <div class="toolbar" style="margin-bottom:.8rem">
+      <span class="muted small">Torn Value Calculator — embedded from your Torn-Value-Calculator project.</span>
+      <span class="spacer"></span>
+      <a class="btn btn-small" href="https://theg3isty.github.io/Torn-Value-Calculator/" target="_blank" rel="noopener noreferrer">Open full page ↗</a>
+    </div>
+    <div class="calc-wrap">
+      <iframe id="calc-frame" title="Torn Value Calculator"></iframe>
+    </div>
+  </div><!-- /#view-calc -->
 </div>
 
 <!-- ============ ADMIN (owner only) ============ -->
@@ -1496,13 +1512,20 @@
     })[code] || ('War list error: ' + code + '.');
   }
 
+  const CALC_URL = 'https://theg3isty.github.io/Torn-Value-Calculator/';
+  // Lazy-load the calculator iframe the first time its tab is opened.
+  function loadCalc(){ const f = $('#calc-frame'); if(f && !f.getAttribute('src')) f.src = CALC_URL; }
   function switchView(view){
     activeView = view;
     $('#view-hitlist').hidden = view !== 'hitlist';
     $('#view-war').hidden = view !== 'war';
+    $('#view-calc').hidden = view !== 'calc';
     $('#tab-hitlist').classList.toggle('active', view === 'hitlist');
     $('#tab-war').classList.toggle('active', view === 'war');
-    if(view === 'war') renderWar(); else render();
+    $('#tab-calc').classList.toggle('active', view === 'calc');
+    if(view === 'war') renderWar();
+    else if(view === 'calc') loadCalc();
+    else render();
   }
   // Build the war faction sub-tabs from the current whitelist.
   function renderWarSubtabs(){
@@ -2021,6 +2044,7 @@
     // Tabs
     $('#tab-hitlist').addEventListener('click', () => switchView('hitlist'));
     $('#tab-war').addEventListener('click', () => switchView('war'));
+    $('#tab-calc').addEventListener('click', () => switchView('calc'));
     renderWarSubtabs();   // war faction sub-tabs (generated from the whitelist)
 
     // War controls (master-only actions are also enforced server-side)
