@@ -8,19 +8,38 @@
  * makes a "simple" CORS request (no preflight — Apps Script can't answer OPTIONS).
  *
  * SECURITY: every action requires the caller's Torn API key, which is verified
- * server-side to belong to one of the WHITELISTED factions (Boykisser Meetup or
- * Static Hearts) before anything is read or written. The key is never stored
- * (only a short-lived hashed yes/no is cached). This is the REAL faction gate —
- * the client-side gate is just UX.
+ * server-side to belong to a WHITELISTED faction before anything is read or
+ * written. The key is never stored (only a short-lived hashed yes/no is cached).
+ * This is the REAL faction gate — the client-side gate is just UX.
  *
- * MULTI-FACTION (added): the tool now serves two factions. Each hit-list target
- * records WHICH faction added it (auto-detected from the caller's key), plus a
- * SHARED flag meaning "enemy of both factions". The War list has one roster PER
- * faction (two tabs), each independently master-controlled.
+ * DYNAMIC CONFIG: the whitelist of factions and the list of MASTERS are stored in
+ * Script Properties and edited live by the OWNER through the app's Admin panel —
+ * no code change or redeploy needed to add a faction or a master. The OWNER id is
+ * the one hardcoded root of trust (below); it can never be changed in-app, so the
+ * owner can't be locked out.
+ *
+ * ROLES: owner (super-admin) ⊃ master (warmaster == listmaster: controls all war
+ * rosters + hit-list curation) ⊃ member (anyone in a whitelisted faction: can add,
+ * edit name/why, and refresh stats).
  */
 
-// Factions allowed through the gate. Key = Torn faction id (string), value = name.
-var FACTIONS = { '56875': 'Boykisser Meetup', '45990': 'Static Hearts' };
+// The one hardcoded identity — sole super-admin / owner. Root of trust: always
+// passes the gate, is always a master, and is the only one who may edit the
+// whitelist or the masters list. Never make this editable in-app.
+var OWNER_ID = 4117638;   // TheG3ISTY
+
+// Seed config, used ONLY when the Script Properties are still empty (first run).
+// After that the live values in Script Properties win.
+var SEED_WHITELIST = {
+  '56875': { name: 'Boykisser Meetup', color: '#60a5fa' },  // blue
+  '45990': { name: 'Static Hearts',    color: '#f472b6' }   // pink
+};
+var SEED_MASTERS = [4117638, 3558000];   // TheG3ISTY, Madilynn-SkyBby
+// Palette auto-assigned to newly whitelisted factions (first unused wins).
+var FACTION_COLORS = ['#60a5fa', '#f472b6', '#c084fc', '#fbbf24', '#34d399', '#22d3ee', '#fb923c', '#a3e635'];
+var CFG_WHITELIST = 'cfg_whitelist';
+var CFG_MASTERS = 'cfg_masters';
+
 // Legacy targets predate the Faction column; treat them as Boykisser Meetup's.
 var DEFAULT_FACTION = 56875;
 
@@ -28,34 +47,67 @@ var SHEET_NAME = 'Targets';
 // 'Faction' = id of the faction that added the target (auto-detected).
 // 'Shared'  = TRUE when the target is an enemy of BOTH factions.
 var HEADERS = ['Name', 'Why', 'StatEstimate', 'StatHuman', 'CheckedAt', 'Manual', 'Faction', 'Shared'];
-// Faction positions allowed to REMOVE targets (compared case-insensitively).
+// Faction positions that historically could remove targets (kept for reference;
+// delete is now master-only, so this is unused).
 var REMOVE_ROLES = ['boykisser', 'dommy mommy', 'leader', 'co-leader'];
 
-// MASTERS have FULL control (warmaster == listmaster, one unified role): both war
-// rosters AND hit-list curation (delete / Manual / Shared / Faction). Add a Torn
-// player id here to grant it; each master uses their own API key for war pulls.
-var MASTERS = [4117638, 3558000];   // TheG3ISTY, Madilynn-SkyBby
-
-// ---- War list (one roster per faction, each its own tab + meta) ----
-// Each roster is generated from an enemy faction ID and is master-controlled:
-// any MASTER may generate/edit/activate it. Everyone else can only READ it, and
-// only once a master has activated it.
-//   sheet    — the Sheet tab holding the roster
-//   meta     — Script Property key holding { active, factionId, factionName, generatedAt }
-//   factionId— OUR faction for this roster (its "friendly"/green side)
-var WAR_ROSTERS = {
-  bkm: { sheet: 'War',    meta: 'warMeta',    factionId: 56875 },
-  sh:  { sheet: 'War_SH', meta: 'warMeta_SH', factionId: 45990 }
+// ---- War list: one roster per whitelisted faction, each its own tab + meta ----
+// A roster is keyed by the faction id it belongs to. Its sheet/meta names are
+// derived from that id, EXCEPT the two original factions keep their legacy names
+// so existing data is preserved.
+var WAR_LEGACY = {
+  '56875': { sheet: 'War',    meta: 'warMeta' },
+  '45990': { sheet: 'War_SH', meta: 'warMeta_SH' }
 };
 // 'Side' = friendly (our faction, shown green) | enemy (target faction, red).
 // 'Manual' = TRUE when the stat was hand-entered; such rows are skipped by refreshes.
 var WAR_HEADERS = ['Name', 'Position', 'Level', 'Status', 'StatEstimate', 'StatHuman', 'CheckedAt', 'Side', 'Manual'];
 
-function warCfg(wkey) { return WAR_ROSTERS[wkey] || WAR_ROSTERS.bkm; }
-function warKeyOf(body) { return (body && body.war === 'sh') ? 'sh' : 'bkm'; }
+/* ---------- Dynamic config (Script Properties, owner-editable) ---------- */
+function getWhitelist() {
+  var raw = PropertiesService.getScriptProperties().getProperty(CFG_WHITELIST);
+  if (raw) { try { var p = JSON.parse(raw); if (p && typeof p === 'object') return p; } catch (e) {} }
+  return SEED_WHITELIST;
+}
+function saveWhitelist(w) { PropertiesService.getScriptProperties().setProperty(CFG_WHITELIST, JSON.stringify(w)); }
+function getMasters() {
+  var raw = PropertiesService.getScriptProperties().getProperty(CFG_MASTERS);
+  if (raw) { try { var a = JSON.parse(raw); if (a && a.length !== undefined) return arrNums(a); } catch (e) {} }
+  return SEED_MASTERS.slice();
+}
+function saveMasters(a) { PropertiesService.getScriptProperties().setProperty(CFG_MASTERS, JSON.stringify(arrNums(a))); }
+function arrNums(a) { var o = []; for (var i = 0; i < a.length; i++) { var n = Number(a[i]); if (n) o.push(n); } return o; }
+// Pick a stable colour for a new faction: first palette entry not already in use.
+function pickColor(wl) {
+  var used = {};
+  for (var k in wl) { if (wl.hasOwnProperty(k) && wl[k]) used[wl[k].color] = true; }
+  for (var i = 0; i < FACTION_COLORS.length; i++) { if (!used[FACTION_COLORS[i]]) return FACTION_COLORS[i]; }
+  return FACTION_COLORS[Object.keys(wl).length % FACTION_COLORS.length];
+}
+
+function warCfg(fid) {
+  fid = Number(fid);
+  var leg = WAR_LEGACY[String(fid)];
+  return {
+    sheet: leg ? leg.sheet : ('War_' + fid),
+    meta:  leg ? leg.meta  : ('warMeta_' + fid),
+    factionId: fid
+  };
+}
+// The roster a request targets: body.war is a faction id. Falls back to the first
+// whitelisted faction if missing/unknown.
+function warKeyOf(body) {
+  var fid = Number(body && body.war) || 0;
+  var wl = getWhitelist();
+  if (wl[String(fid)]) return fid;
+  var ids = Object.keys(wl);
+  return ids.length ? Number(ids[0]) : DEFAULT_FACTION;
+}
 
 function doGet(e) {
-  return json({ ok: true, service: 'BKM hitlist backend', hint: 'POST {action, key, ...} as text/plain' });
+  // Public config so the client-side gate + UI know the current whitelist before
+  // anyone logs in (colours, gate factions). No secrets here.
+  return json({ ok: true, service: 'BKM hitlist backend', factions: getWhitelist() });
 }
 
 function doPost(e) {
@@ -67,9 +119,9 @@ function doPost(e) {
   if (!key) return json({ ok: false, error: 'missing_key' });
   var member = memberInfo(key);
   if (!member.ok) return json({ ok: false, error: 'not_verified' });
-  var mayRemove = canRemove(member.position);
-  var wkey = warKeyOf(body);
+  var owner = isOwner(member);
   var master = isMaster(member);
+  var wkey = warKeyOf(body);
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
@@ -86,7 +138,7 @@ function doPost(e) {
       case 'setManual': out = master ? setManual(body)  : forbiddenTargets(); break;
       case 'setShared': out = master ? setShared(body)  : forbiddenTargets(); break;
       case 'setFaction': out = master ? setFaction(body) : forbiddenTargets(); break;
-      // ---- War list (per-roster; body.war selects 'bkm' | 'sh') ----
+      // ---- War list (per-roster; body.war selects the faction id) ----
       case 'warStatus':       out = warStatus(member, wkey); break;
       case 'warGenerate':     out = master ? warGenerate(body, wkey)     : forbidden(); break;
       case 'warPullFriendly': out = master ? warPullFriendly(body, wkey) : forbidden(); break;
@@ -95,26 +147,29 @@ function doPost(e) {
       case 'warActivate':     out = master ? warSetActive(true, wkey)    : forbidden(); break;
       case 'warDeactivate':   out = master ? warSetActive(false, wkey)   : forbidden(); break;
       case 'warClear':        out = master ? warClear(wkey)              : forbidden(); break;
+      // ---- Admin (OWNER-ONLY): live whitelist + masters management ----
+      case 'adminConfig':        out = owner ? adminConfig()             : forbidden(); break;
+      case 'adminAddFaction':    out = owner ? adminAddFaction(body)     : forbidden(); break;
+      case 'adminRemoveFaction': out = owner ? adminRemoveFaction(body)  : forbidden(); break;
+      case 'adminAddMaster':     out = owner ? adminAddMaster(body)      : forbidden(); break;
+      case 'adminRemoveMaster':  out = owner ? adminRemoveMaster(body)   : forbidden(); break;
       default:         out = { ok: false, error: 'unknown_action' };
     }
   } finally {
     lock.releaseLock();
   }
-  // Tell the client the caller's permissions (+ identity) on every response.
-  // NOTE: these use `my*` names so they never collide with a War envelope's
-  // `factionId`/`factionName`, which mean the TARGET (enemy) faction.
-  out.mayRemove = mayRemove;
+  // Identity + config the client needs on every response.
   out.position = member.position;
   out.myFactionId = member.factionId;
   out.myFactionName = member.factionName;
-  // Master status for BOTH rosters (masters control both), so the client can show
-  // the right controls on whichever war sub-tab it's viewing.
-  out.warMasters = { bkm: master, sh: master };
+  out.isMaster = master;
+  out.isOwner = owner;
+  out.factions = getWhitelist();   // keep the client's whitelist/colours fresh
   return json(out);
 }
 
 /* ---------- Torn faction verification (cached 5 min, key hashed) ---------- */
-// Returns { ok:<in a whitelisted faction>, position, playerId, factionId, factionName }.
+// Returns { ok:<in a whitelisted faction OR owner>, position, playerId, factionId, factionName }.
 function memberInfo(key) {
   var cache = CacheService.getScriptCache();
   var ck = cacheKey(key);
@@ -122,10 +177,8 @@ function memberInfo(key) {
   if (hit) {
     try {
       var p = JSON.parse(hit);
-      // Honor cached negatives, and cached positives that already carry both a
-      // playerId and a factionId. Ignore stale positives cached before those
-      // fields existed, so they re-fetch (otherwise a pre-upgrade cache entry
-      // keeps a master reading as non-master, or omits the faction origin).
+      // Honor cached negatives, and cached positives that carry both a playerId
+      // and a factionId. Stale pre-upgrade positives re-fetch.
       if (p && typeof p.ok === 'boolean' && (p.ok === false || (p.playerId && p.factionId))) return p;
     } catch (e) {}
   }
@@ -136,22 +189,32 @@ function memberInfo(key) {
       { muteHttpExceptions: true }
     );
     var data = JSON.parse(resp.getContentText());
-    if (data && !data.error && data.faction && FACTIONS.hasOwnProperty(String(data.faction.faction_id))) {
-      info.ok = true;
-      info.position = String(data.faction.position || '');
-      info.playerId = Number(data.player_id || 0);
-      info.factionId = Number(data.faction.faction_id);
-      info.factionName = FACTIONS[String(data.faction.faction_id)];
+    if (data && !data.error && data.faction) {
+      var fid = Number(data.faction.faction_id);
+      var pid = Number(data.player_id || 0);
+      var wl = getWhitelist();
+      // Owner always passes (can't lock themselves out); everyone else must be
+      // in a currently-whitelisted faction.
+      if (wl[String(fid)] || pid === OWNER_ID) {
+        info.ok = true;
+        info.position = String(data.faction.position || '');
+        info.playerId = pid;
+        info.factionId = fid;
+        info.factionName = (wl[String(fid)] && wl[String(fid)].name) || ('Faction ' + fid);
+      }
     }
   } catch (err) {}
   cache.put(ck, JSON.stringify(info), 300);
   return info;
 }
+function isOwner(member)  { return !!member && Number(member.playerId) === OWNER_ID; }
+function isMaster(member) {
+  if (!member) return false;
+  if (Number(member.playerId) === OWNER_ID) return true;   // owner is always a master
+  return getMasters().indexOf(Number(member.playerId)) !== -1;
+}
 function canRemove(position) {
   return REMOVE_ROLES.indexOf(String(position || '').trim().toLowerCase()) !== -1;
-}
-function isMaster(member) {
-  return !!member && MASTERS.indexOf(Number(member.playerId)) !== -1;
 }
 function forbidden() { return { ok: false, error: 'forbidden' }; }
 // Forbidden, but still hand back the current list so the client re-syncs to truth.
@@ -161,12 +224,57 @@ function cacheKey(key) {
   return 'v_' + Utilities.base64Encode(d);
 }
 
+/* ---------- Admin actions (owner-only; enforced in doPost) ---------- */
+function adminConfig() { return { ok: true, whitelist: getWhitelist(), masters: getMasters() }; }
+function adminAddFaction(body) {
+  var fid = parseInt(body.factionId, 10);
+  if (!fid) return { ok: false, error: 'bad_faction' };
+  var res = fetchFactionName(fid, String(body.key || '').trim());
+  if (!res.ok) return res;
+  var wl = getWhitelist();
+  var color = (wl[String(fid)] && wl[String(fid)].color) ? wl[String(fid)].color : pickColor(wl);
+  wl[String(fid)] = { name: res.name, color: color };
+  saveWhitelist(wl);
+  return { ok: true, whitelist: wl, masters: getMasters() };
+}
+function adminRemoveFaction(body) {
+  var fid = String(parseInt(body.factionId, 10) || 0);
+  var wl = getWhitelist();
+  if (wl[fid]) { delete wl[fid]; saveWhitelist(wl); }
+  return { ok: true, whitelist: wl, masters: getMasters() };
+}
+function adminAddMaster(body) {
+  var pid = parseInt(body.playerId, 10);
+  if (!pid) return { ok: false, error: 'bad_player' };
+  var m = getMasters();
+  if (m.indexOf(pid) === -1) { m.push(pid); saveMasters(m); }
+  return { ok: true, whitelist: getWhitelist(), masters: m };
+}
+function adminRemoveMaster(body) {
+  var pid = parseInt(body.playerId, 10) || 0;
+  // Never remove the owner (they stay a master via isOwner regardless).
+  var m = getMasters().filter(function (x) { return x !== pid || x === OWNER_ID; });
+  saveMasters(m);
+  return { ok: true, whitelist: getWhitelist(), masters: m };
+}
+// Look up a faction's name from Torn using the owner's key.
+function fetchFactionName(fid, key) {
+  try {
+    var resp = UrlFetchApp.fetch(
+      'https://api.torn.com/faction/' + fid + '?selections=basic&key=' + encodeURIComponent(key) + '&comment=BKMAdmin',
+      { muteHttpExceptions: true }
+    );
+    var data = JSON.parse(resp.getContentText());
+    if (!data || data.error) return { ok: false, error: 'torn_error', detail: (data && data.error) ? data.error.error : '' };
+    return { ok: true, name: String(data.name || ('Faction ' + fid)) };
+  } catch (err) { return { ok: false, error: 'torn_parse' }; }
+}
+
 /* ---------- Sheet helpers ---------- */
 // Coerce a cell value (boolean or "TRUE"/"true"/1) to a real boolean.
 function truthy(v) { return v === true || String(v).toUpperCase() === 'TRUE'; }
 // Non-destructive migration: if a live sheet predates a column we now expect,
-// append the missing header label(s) to the right. Existing rows keep their data;
-// the new column reads as empty (and our readers default it) until it's written.
+// append the missing header label(s) to the right.
 function ensureHeaders(sh, headers) {
   if (sh.getLastRow() === 0) { sh.appendRow(headers); sh.setFrozenRows(1); return; }
   var have = sh.getLastColumn();
@@ -183,8 +291,8 @@ function sheet() {
   ensureHeaders(sh, HEADERS);
   if (fresh) {
     sh.getRange('A:A').setNumberFormat('@');  // Name -> plain text (keep "[id]")
-    sh.getRange('E:E').setNumberFormat('@');  // CheckedAt -> plain text (keep DD.MM.YYYY HH:mm)
-    sh.getRange('C:C').setNumberFormat('0');  // StatEstimate -> integer, no sci-notation
+    sh.getRange('E:E').setNumberFormat('@');  // CheckedAt -> plain text
+    sh.getRange('C:C').setNumberFormat('0');  // StatEstimate -> integer
     sh.getRange('G:G').setNumberFormat('0');  // Faction -> integer id
   }
   return sh;
@@ -221,12 +329,12 @@ function findRowById(sh, id) {
   if (last < 2) return -1;
   var names = sh.getRange(2, 1, last - 1, 1).getValues();
   for (var i = 0; i < names.length; i++) {
-    if (idFromName(names[i][0]) === id) return i + 2; // 1-based, incl header row
+    if (idFromName(names[i][0]) === id) return i + 2;
   }
   return -1;
 }
 
-/* ---------- Actions ---------- */
+/* ---------- Hit-list actions ---------- */
 // The origin faction is auto-detected from the caller's verified key (member).
 function addTarget(body, member) {
   var name = String(body.name || '').trim();
@@ -267,7 +375,6 @@ function setStats(body) {
   var sh = sheet();
   var manualCol = HEADERS.indexOf('Manual') + 1;
   var last = sh.getLastRow();
-  // Read the Manual flags once so a batch refresh never clobbers a hand-entered stat.
   var manualVals = last > 1 ? sh.getRange(2, manualCol, last - 1, 1).getValues() : [];
   for (var i = 0; i < stats.length; i++) {
     var s = stats[i];
@@ -282,8 +389,6 @@ function setStats(body) {
   }
   return { ok: true, targets: readAll() };
 }
-// Toggle a hit-list target's Manual flag (any verified member). When enabling with
-// a value, write the hand-entered stat too; the row is then skipped by refreshes.
 function setManual(body) {
   var id = String(body.id || '');
   var sh = sheet();
@@ -300,8 +405,6 @@ function setManual(body) {
   }
   return { ok: true, targets: readAll() };
 }
-// Toggle a hit-list target's Shared flag (any verified member). Shared = enemy of
-// both factions, so it shows up in both faction views.
 function setShared(body) {
   var id = String(body.id || '');
   var sh = sheet();
@@ -310,11 +413,10 @@ function setShared(body) {
   sh.getRange(row, HEADERS.indexOf('Shared') + 1).setValue(!!body.shared);
   return { ok: true, targets: readAll() };
 }
-// MASTER: reassign which faction a target belongs to (move an enemy between
-// Boykisser Meetup and Static Hearts). Only a whitelisted faction id is accepted.
+// MASTER: reassign which faction a target belongs to. Only a whitelisted faction id.
 function setFaction(body) {
   var fac = Number(body.faction || 0);
-  if (!FACTIONS.hasOwnProperty(String(fac))) return { ok: false, error: 'bad_faction', targets: readAll() };
+  if (!getWhitelist()[String(fac)]) return { ok: false, error: 'bad_faction', targets: readAll() };
   var id = String(body.id || '');
   var sh = sheet();
   var row = findRowById(sh, id);
@@ -323,7 +425,7 @@ function setFaction(body) {
   return { ok: true, targets: readAll() };
 }
 
-/* ---------- War list (per-roster) ---------- */
+/* ---------- War list (per-roster, keyed by faction id) ---------- */
 function warSheet(wkey) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var name = warCfg(wkey).sheet;
@@ -332,12 +434,12 @@ function warSheet(wkey) {
   var fresh = sh.getLastRow() === 0;
   ensureHeaders(sh, WAR_HEADERS);
   if (fresh) {
-    sh.getRange('A:A').setNumberFormat('@');  // Name -> plain text (keep "[id]")
-    sh.getRange('B:B').setNumberFormat('@');  // Position -> text
-    sh.getRange('D:D').setNumberFormat('@');  // Status -> text
-    sh.getRange('G:G').setNumberFormat('@');  // CheckedAt -> text
-    sh.getRange('H:H').setNumberFormat('@');  // Side -> text
-    sh.getRange('E:E').setNumberFormat('0');  // StatEstimate -> integer
+    sh.getRange('A:A').setNumberFormat('@');  // Name
+    sh.getRange('B:B').setNumberFormat('@');  // Position
+    sh.getRange('D:D').setNumberFormat('@');  // Status
+    sh.getRange('G:G').setNumberFormat('@');  // CheckedAt
+    sh.getRange('H:H').setNumberFormat('@');  // Side
+    sh.getRange('E:E').setNumberFormat('0');  // StatEstimate
   }
   return sh;
 }
@@ -374,8 +476,6 @@ function warReadAll(wkey) {
   }
   return out;
 }
-// Serialize a war object (from warReadAll) back into a sheet row — used when we
-// rewrite one side of the roster and must preserve the other side verbatim.
 function warObjToRow(x) {
   return [
     x.name,
@@ -389,8 +489,6 @@ function warObjToRow(x) {
     !!x.manual
   ];
 }
-// Fetch a faction's roster from Torn -> array of fresh rows tagged with `side`.
-// Returns { ok, rows, name } or { ok:false, error }.
 function fetchFactionRows(fid, key, side) {
   var data;
   try {
@@ -412,7 +510,6 @@ function fetchFactionRows(fid, key, side) {
   }
   return { ok: true, rows: rows, name: String(data.name || ('Faction ' + fid)) };
 }
-// Replace only the rows on `side` with `newRows`, preserving the other side.
 function warReplaceSide(sh, wkey, side, newRows) {
   var keep = warReadAll(wkey).filter(function (x) { return x.side !== side; }).map(warObjToRow);
   var last = sh.getLastRow();
@@ -429,7 +526,6 @@ function warFindRowById(sh, id) {
   }
   return -1;
 }
-// Standard war response envelope for a roster (full roster + meta).
 function warEnvelope(wkey) {
   var m = warMeta(wkey);
   return {
@@ -437,9 +533,6 @@ function warEnvelope(wkey) {
     active: m.active, factionId: m.factionId, factionName: m.factionName, generatedAt: m.generatedAt
   };
 }
-// The War tab is visible to everyone, but the roster + which faction it targets
-// are only returned when the roster is active OR the caller is its master (so the
-// master can prep privately before revealing it to the faction).
 function warStatus(member, wkey) {
   var master = isMaster(member);
   var m = warMeta(wkey);
@@ -452,17 +545,13 @@ function warStatus(member, wkey) {
   }
   return out;
 }
-// MASTER: pull the ENEMY faction's roster from Torn and replace the enemy side of
-// this roster's tab (the friendly side, if any, is preserved).
 function warGenerate(body, wkey) {
   var fid = parseInt(body.factionId, 10);
   if (!fid) return { ok: false, error: 'bad_faction' };
   var res = fetchFactionRows(fid, String(body.key || '').trim(), 'enemy');
   if (!res.ok) return res;
-
   var sh = warSheet(wkey);
   warReplaceSide(sh, wkey, 'enemy', res.rows);
-
   var m = warMeta(wkey);
   m.factionId = fid;
   m.factionName = res.name;
@@ -470,9 +559,7 @@ function warGenerate(body, wkey) {
   saveWarMeta(wkey, m);
   return warEnvelope(wkey);
 }
-// MASTER: pull OUR OWN faction's roster (shown green) and replace the friendly
-// side; the enemy side and war meta (which enemy faction is targeted) are left
-// untouched. "Our" faction is whichever this roster belongs to (bkm/sh).
+// Pull the roster's OWN faction (green side); "our" faction == the roster's id.
 function warPullFriendly(body, wkey) {
   var res = fetchFactionRows(warCfg(wkey).factionId, String(body.key || '').trim(), 'friendly');
   if (!res.ok) return res;
@@ -490,7 +577,7 @@ function warSetStats(body, wkey) {
     var s = stats[i];
     var row = warFindRowById(sh, String(s.id));
     if (row === -1) continue;
-    if (manualVals[row - 2] && truthy(manualVals[row - 2][0])) continue;  // manual override: leave untouched
+    if (manualVals[row - 2] && truthy(manualVals[row - 2][0])) continue;
     sh.getRange(row, 5, 1, 3).setValues([[
       (s.statEstimate === null || s.statEstimate === undefined) ? '' : s.statEstimate,
       (s.statHuman === null || s.statHuman === undefined) ? '' : s.statHuman,
@@ -499,7 +586,6 @@ function warSetStats(body, wkey) {
   }
   return warEnvelope(wkey);
 }
-// MASTER: toggle a war member's Manual flag (+ optional hand-entered stat).
 function warSetManual(body, wkey) {
   var id = String(body.id || '');
   var sh = warSheet(wkey);

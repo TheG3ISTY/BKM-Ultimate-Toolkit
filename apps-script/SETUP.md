@@ -34,18 +34,27 @@ Do these steps once, then send Claude the **Web app URL**.
 
 ---
 
-## Two factions
+## Factions & roles — managed live from the app (no redeploy)
 
-The tool now serves **two whitelisted factions**: Boykisser Meetup `#56875`
-and Static Hearts `#45990`. Anyone with a key from either faction can enter.
+The whitelist of factions and the list of masters are stored in **Script
+Properties** and edited live by the **owner** through the app's **⚙ Admin**
+panel — adding a faction or a master needs **no code change and no redeploy**.
 
-- **Hit list:** each target records **which faction added it** (auto-detected
-  from the caller's key — no dropdown). A **Shared** checkbox marks a target as
-  an enemy of *both* factions. The list has a faction filter (All / Boykisser
-  Meetup / Static Hearts / Shared) and colours rows by origin: Boykisser Meetup
-  **blue**, Static Hearts **pink**, Shared **purple**.
-- To whitelist more factions later, add them to `var FACTIONS = {...}` at the
-  top of `Code.gs` and redeploy.
+- **Owner** = the one hardcoded identity, `var OWNER_ID = 4117638;` (TheG3ISTY).
+  Root of trust: always passes the gate, is always a master, is the only one who
+  sees the Admin panel, and can never be removed or locked out. This is the ONLY
+  thing you edit in code + redeploy for.
+- **Masters** (warmaster == listmaster): full control of all war rosters + hit-list
+  curation (delete / Manual / Shared / Faction). Owner adds/removes them in Admin.
+- **Members**: anyone in a whitelisted faction. Can add targets, edit name/notes,
+  and refresh stats.
+- Seeds (used only on first run, before anything is saved): whitelist =
+  Boykisser Meetup `#56875` + Static Hearts `#45990`; masters = `[4117638, 3558000]`.
+
+**Hit list:** each target records **which faction added it** (auto-detected from
+the caller's key). A **Shared** checkbox (master-only) marks a target as an enemy
+of *all* factions. The faction filter and row colours are generated from the live
+whitelist; new factions get an auto-assigned colour.
 
 ## War list — one roster per faction
 
@@ -55,11 +64,12 @@ enemy faction ID and is **master-controlled**: only that roster's warmaster may
 generate, update, activate, or clear it — everyone else gets a **read-only**
 view. Non-masters only see a roster once its master has **activated** it.
 
-- Masters are configured in `Code.gs` as `var MASTERS = [...]` (Torn player IDs).
-  **Warmaster and listmaster are one unified role**: a master controls *both* war
-  rosters *and* hit-list curation (delete / Manual / Shared / Faction). Currently
-  `[4117638, 3558000]` (TheG3ISTY, Madilynn-SkyBby). Add or remove an ID and
-  redeploy to change who has control. Each master uses their own API key.
+- Masters are managed live in the **Admin** panel (owner only), not in code.
+  **Warmaster and listmaster are one unified role**: a master controls *all* war
+  rosters *and* hit-list curation. Each master uses their own API key.
+- There is **one war roster per whitelisted faction**, keyed by faction id. The
+  two original factions keep their legacy sheet names (`War`, `War_SH`); any newly
+  whitelisted faction gets a `War_<id>` tab auto-created on first use.
 - Each roster is written to its own tab (auto-created): **`War`** (Boykisser
   Meetup) and **`War_SH`** (Static Hearts). Activation state lives in Script
   Properties, not a cell.
