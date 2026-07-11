@@ -31,17 +31,21 @@ var HEADERS = ['Name', 'Why', 'StatEstimate', 'StatHuman', 'CheckedAt', 'Manual'
 // Faction positions allowed to REMOVE targets (compared case-insensitively).
 var REMOVE_ROLES = ['boykisser', 'dommy mommy', 'leader', 'co-leader'];
 
+// MASTERS have FULL control (warmaster == listmaster, one unified role): both war
+// rosters AND hit-list curation (delete / Manual / Shared / Faction). Add a Torn
+// player id here to grant it; each master uses their own API key for war pulls.
+var MASTERS = [4117638, 3558000];   // TheG3ISTY, Madilynn-SkyBby
+
 // ---- War list (one roster per faction, each its own tab + meta) ----
 // Each roster is generated from an enemy faction ID and is master-controlled:
-// only that roster's warmaster may generate/edit/activate it. Everyone else can
-// only READ it, and only once the master has activated it.
+// any MASTER may generate/edit/activate it. Everyone else can only READ it, and
+// only once a master has activated it.
 //   sheet    — the Sheet tab holding the roster
 //   meta     — Script Property key holding { active, factionId, factionName, generatedAt }
 //   factionId— OUR faction for this roster (its "friendly"/green side)
-//   master   — Torn player id allowed to control this roster
 var WAR_ROSTERS = {
-  bkm: { sheet: 'War',    meta: 'warMeta',    factionId: 56875, master: 4117638 },   // TheG3ISTY
-  sh:  { sheet: 'War_SH', meta: 'warMeta_SH', factionId: 45990, master: 4117638 }    // TODO: Static Hearts warmaster (placeholder — same master for now, one API key)
+  bkm: { sheet: 'War',    meta: 'warMeta',    factionId: 56875 },
+  sh:  { sheet: 'War_SH', meta: 'warMeta_SH', factionId: 45990 }
 };
 // 'Side' = friendly (our faction, shown green) | enemy (target faction, red).
 // 'Manual' = TRUE when the stat was hand-entered; such rows are skipped by refreshes.
@@ -65,7 +69,7 @@ function doPost(e) {
   if (!member.ok) return json({ ok: false, error: 'not_verified' });
   var mayRemove = canRemove(member.position);
   var wkey = warKeyOf(body);
-  var master = isWarMaster(member, wkey);
+  var master = isMaster(member);
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
@@ -103,9 +107,9 @@ function doPost(e) {
   out.position = member.position;
   out.myFactionId = member.factionId;
   out.myFactionName = member.factionName;
-  // War-master status for BOTH rosters, so the client can show the right controls
-  // on whichever war sub-tab it's viewing.
-  out.warMasters = { bkm: isWarMaster(member, 'bkm'), sh: isWarMaster(member, 'sh') };
+  // Master status for BOTH rosters (masters control both), so the client can show
+  // the right controls on whichever war sub-tab it's viewing.
+  out.warMasters = { bkm: master, sh: master };
   return json(out);
 }
 
@@ -146,8 +150,8 @@ function memberInfo(key) {
 function canRemove(position) {
   return REMOVE_ROLES.indexOf(String(position || '').trim().toLowerCase()) !== -1;
 }
-function isWarMaster(member, wkey) {
-  return !!member && Number(member.playerId) === warCfg(wkey).master;
+function isMaster(member) {
+  return !!member && MASTERS.indexOf(Number(member.playerId)) !== -1;
 }
 function forbidden() { return { ok: false, error: 'forbidden' }; }
 // Forbidden, but still hand back the current list so the client re-syncs to truth.
@@ -437,7 +441,7 @@ function warEnvelope(wkey) {
 // are only returned when the roster is active OR the caller is its master (so the
 // master can prep privately before revealing it to the faction).
 function warStatus(member, wkey) {
-  var master = isWarMaster(member, wkey);
+  var master = isMaster(member);
   var m = warMeta(wkey);
   var out = { ok: true, war: wkey, active: m.active, master: master };
   if (m.active || master) {

@@ -55,11 +55,11 @@ enemy faction ID and is **master-controlled**: only that roster's warmaster may
 generate, update, activate, or clear it — everyone else gets a **read-only**
 view. Non-masters only see a roster once its master has **activated** it.
 
-- Warmasters are configured in `Code.gs` under `var WAR_ROSTERS = {...}`, one
-  `master` (Torn player ID) per roster. **Both currently point to `4117638`
-  (TheG3ISTY)** — one person runs both wars with one API key for now. To hand the
-  Static Hearts war to their own warmaster later, change `WAR_ROSTERS.sh.master`
-  to that player's Torn ID and redeploy.
+- Masters are configured in `Code.gs` as `var MASTERS = [...]` (Torn player IDs).
+  **Warmaster and listmaster are one unified role**: a master controls *both* war
+  rosters *and* hit-list curation (delete / Manual / Shared / Faction). Currently
+  `[4117638, 3558000]` (TheG3ISTY, Madilynn-SkyBby). Add or remove an ID and
+  redeploy to change who has control. Each master uses their own API key.
 - Each roster is written to its own tab (auto-created): **`War`** (Boykisser
   Meetup) and **`War_SH`** (Static Hearts). Activation state lives in Script
   Properties, not a cell.
