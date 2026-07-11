@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Faction Hit List — Boykisser Meetup &amp; Static Hearts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 <style>
   /* ===== Theme ===== */
   :root{
@@ -132,9 +134,111 @@
   .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:#1a1020}
   .war-pill{font-family:var(--mono);font-weight:700}
 
-  /* ===== Embedded Value Calculator (iframe tab) ===== */
-  .calc-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
-  #calc-frame{width:100%;height:calc(100vh - 190px);min-height:620px;border:0;display:block}
+  /* ===== Value Calculator (integrated; all selectors scoped under #view-calc) ===== */
+  #view-calc{
+    --bg:#07070c;--surface:#0e0e16;--s2:#15151f;--s3:#1c1c2a;--brd:#252538;
+    --tx:#e4e4ee;--txd:#8585a0;--txm:#4e4e68;--red:#ff3848;--rg:rgba(255,56,72,.25);
+    --grn:#22d97b;--gd:rgba(34,217,123,.12);--gold:#f0c530;--ora:#ff8c38;
+    max-width:1180px;margin:0 auto;color:var(--tx);
+    font-family:'JetBrains Mono','Courier New',ui-monospace,monospace;
+  }
+  #view-calc *{margin:0;padding:0;box-sizing:border-box}
+  #view-calc .calc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--brd);flex-wrap:wrap;gap:10px}
+  #view-calc .calc-title{display:flex;align-items:center;gap:14px}
+  #view-calc .calc-ico{width:40px;height:40px;background:linear-gradient(135deg,#ff3848,#ff6840);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;box-shadow:0 0 24px var(--rg)}
+  #view-calc .calc-h1{font-size:16px;font-weight:700;letter-spacing:3px;text-transform:uppercase}
+  #view-calc .calc-sub{font-size:10px;color:var(--txm);letter-spacing:1.5px}
+  #view-calc .st{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--txm);text-transform:uppercase;letter-spacing:1.5px}
+  #view-calc .dot{width:8px;height:8px;border-radius:50%;background:var(--txm);transition:all .3s}
+  #view-calc .dot.on{background:var(--grn);box-shadow:0 0 10px rgba(34,217,123,.5)}
+  #view-calc .btn{height:42px;padding:0 20px;border:none;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:2px;cursor:pointer;transition:all .15s;white-space:nowrap}
+  #view-calc .br{background:var(--red);color:#fff}
+  #view-calc .br:hover{filter:brightness(1.15);box-shadow:0 0 20px var(--rg)}
+  #view-calc .br:disabled{background:var(--s3);color:var(--txm);cursor:wait;box-shadow:none;filter:none}
+  #view-calc .err{background:rgba(255,56,72,.08);border:1px solid rgba(255,56,72,.25);border-radius:8px;padding:12px 16px;margin-bottom:16px;color:var(--red);font-size:12px;display:none}
+  #view-calc .err.show{display:block}
+  #view-calc .tabs2{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--brd);flex-wrap:wrap}
+  #view-calc .tb{padding:12px 22px;background:none;border:none;border-bottom:2px solid transparent;color:var(--txm);font-family:inherit;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px}
+  #view-calc .tb.active{color:var(--tx);border-bottom-color:var(--red)}
+  #view-calc .tb .cnt{font-size:9px;color:var(--red)}
+  #view-calc .tb .badge{background:var(--ora);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;min-width:18px;text-align:center;line-height:1.3}
+  #view-calc .ctrls{display:flex;gap:14px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  #view-calc .cg{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:10px 16px}
+  #view-calc .cg .lbl{font-size:10px;color:var(--txd);text-transform:uppercase;letter-spacing:1.5px}
+  #view-calc .sli{-webkit-appearance:none;appearance:none;width:130px;height:4px;background:var(--s3);border-radius:2px;outline:none}
+  #view-calc .sli::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;background:var(--red);border-radius:50%;cursor:pointer;box-shadow:0 0 8px var(--rg)}
+  #view-calc .pv{font-size:16px;font-weight:700;color:var(--red);min-width:42px;text-align:right}
+  #view-calc .sw{flex:1;min-width:180px;position:relative}
+  #view-calc .sw .ico{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--txm);font-size:13px;pointer-events:none}
+  #view-calc .si{width:100%;height:42px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:0 14px 0 38px;color:var(--tx);font-family:inherit;font-size:12px;outline:none;transition:border .2s}
+  #view-calc .si:focus{border-color:var(--red)}
+  #view-calc .si::placeholder{color:var(--txm)}
+  #view-calc .cs{height:42px;background:var(--surface);border:1px solid var(--brd);border-radius:10px;padding:0 12px;color:var(--tx);font-family:inherit;font-size:11px;outline:none;cursor:pointer;min-width:150px}
+  #view-calc .cs option{background:var(--s2)}
+  #view-calc .chips{display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  #view-calc .chip{background:var(--surface);border:1px solid var(--brd);border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:8px}
+  #view-calc .chip .cl{font-size:9px;color:var(--txm);text-transform:uppercase;letter-spacing:1px}
+  #view-calc .chip .cv{font-size:13px;font-weight:600}
+  #view-calc .cr{color:var(--red)} #view-calc .cg2{color:var(--grn)} #view-calc .cgl{color:var(--gold)}
+  #view-calc .tw{background:var(--surface);border:1px solid var(--brd);border-radius:12px;overflow:hidden}
+  #view-calc .ts{overflow-x:auto;max-height:62vh;overflow-y:auto}
+  #view-calc table{width:100%;border-collapse:collapse;min-width:680px}
+  #view-calc thead{position:sticky;top:0;z-index:10}
+  #view-calc th{background:var(--s2);padding:13px 14px;text-align:left;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:2px;color:var(--txm);border-bottom:1px solid var(--brd);cursor:pointer;user-select:none;white-space:nowrap;transition:color .15s}
+  #view-calc th:hover{color:var(--txd)}
+  #view-calc th.sorted{color:var(--red)}
+  #view-calc th .arr{margin-left:3px;font-size:8px}
+  #view-calc td{padding:11px 14px;font-size:12px;border-bottom:1px solid rgba(37,37,56,.6);white-space:nowrap;color:var(--tx)}
+  #view-calc tr:hover td{background:rgba(255,56,72,.02)}
+  #view-calc .ic{display:flex;align-items:center;gap:10px}
+  #view-calc .iimg{width:28px;height:28px;border-radius:5px;background:var(--s3);object-fit:contain}
+  #view-calc .inm{font-weight:500}
+  #view-calc .itp{font-size:9px;color:var(--txm);text-transform:uppercase;letter-spacing:1px}
+  #view-calc .pm{color:var(--txd)} #view-calc .ps{color:var(--grn);font-weight:600} #view-calc .pd{color:var(--red);font-size:10px} #view-calc .pc{color:var(--txd);font-size:11px}
+  #view-calc .atb-cell{white-space:nowrap}
+  #view-calc .atb-row{display:flex;align-items:center;gap:4px}
+  #view-calc .atb-qty{width:56px;height:28px;background:var(--s3);border:1px solid var(--brd);border-radius:5px;padding:0 4px;color:var(--tx);font-family:inherit;font-size:12px;text-align:center;outline:none}
+  #view-calc .atb-qty:focus{border-color:var(--grn)}
+  #view-calc .add-btn{width:28px;height:28px;border-radius:6px;border:1px solid var(--brd);background:var(--s3);color:var(--grn);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;line-height:1;font-family:inherit;flex-shrink:0}
+  #view-calc .add-btn:hover{background:var(--grn);color:#fff;border-color:var(--grn);box-shadow:0 0 10px rgba(34,217,123,.3)}
+  #view-calc .atb-in{font-size:9px;color:var(--ora);min-width:20px;text-align:center;font-weight:600}
+  #view-calc .basket-panel{background:var(--surface);border:1px solid var(--brd);border-radius:12px;overflow:hidden}
+  #view-calc .basket-header{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--brd);flex-wrap:wrap;gap:12px}
+  #view-calc .bh-left{display:flex;align-items:center;gap:10px}
+  #view-calc .bh-icon{font-size:20px}
+  #view-calc .bh-title{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:2px}
+  #view-calc .basket-actions{display:flex;gap:8px}
+  #view-calc .ba-btn{padding:7px 14px;border-radius:6px;font-family:inherit;font-size:10px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:1px;border:1px solid var(--brd);transition:all .15s}
+  #view-calc .ba-clear{background:rgba(255,56,72,.1);border-color:rgba(255,56,72,.25);color:var(--red)}
+  #view-calc .ba-clear:hover{background:rgba(255,56,72,.2)}
+  #view-calc .ba-add{background:rgba(34,217,123,.1);border-color:rgba(34,217,123,.25);color:var(--grn)}
+  #view-calc .ba-add:hover{background:rgba(34,217,123,.2)}
+  #view-calc .basket-table{width:100%;border-collapse:collapse}
+  #view-calc .basket-table th{background:var(--s2);padding:12px 14px;text-align:left;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:2px;color:var(--txm);border-bottom:1px solid var(--brd);cursor:default}
+  #view-calc .basket-table td{padding:10px 14px;font-size:12px;border-bottom:1px solid rgba(37,37,56,.5)}
+  #view-calc .basket-table tr:hover td{background:rgba(255,140,56,.02)}
+  #view-calc .bsk-rm{width:24px;height:24px;border-radius:5px;border:1px solid rgba(255,56,72,.2);background:rgba(255,56,72,.08);color:var(--red);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;font-family:inherit}
+  #view-calc .bsk-rm:hover{background:var(--red);color:#fff}
+  #view-calc .bsk-qty{width:60px;height:30px;background:var(--s2);border:1px solid var(--brd);border-radius:5px;padding:0 6px;color:var(--tx);font-family:inherit;font-size:12px;text-align:center;outline:none}
+  #view-calc .bsk-qty:focus{border-color:var(--ora)}
+  #view-calc .bsk-price-input{width:100px;height:30px;background:var(--s2);border:1px solid var(--brd);border-radius:5px;padding:0 8px;color:var(--tx);font-family:inherit;font-size:12px;outline:none}
+  #view-calc .bsk-price-input:focus{border-color:var(--ora)}
+  #view-calc .bsk-name-input{width:160px;height:30px;background:var(--s2);border:1px solid var(--brd);border-radius:5px;padding:0 8px;color:var(--tx);font-family:inherit;font-size:12px;outline:none}
+  #view-calc .bsk-name-input:focus{border-color:var(--ora)}
+  #view-calc .basket-footer{border-top:2px solid var(--brd);padding:18px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
+  #view-calc .bf-stats{display:flex;gap:24px;flex-wrap:wrap}
+  #view-calc .bf-label{font-size:9px;color:var(--txm);text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
+  #view-calc .bf-val{font-size:14px;font-weight:600}
+  #view-calc .bf-total .bf-label{color:var(--ora)}
+  #view-calc .bf-total .bf-val{font-size:24px;font-weight:700;color:var(--ora)}
+  #view-calc .bf-market .bf-val{color:var(--txd)}
+  #view-calc .bf-saved .bf-val{color:var(--red)}
+  #view-calc .bf-items .bf-val{color:var(--grn)}
+  #view-calc .empty{text-align:center;padding:50px 20px;color:var(--txm);white-space:normal}
+  #view-calc .empty .big{font-size:28px;margin-bottom:10px}
+  #view-calc .loading{text-align:center;padding:70px 20px;color:var(--txm)}
+  #view-calc .spinner{width:36px;height:36px;border:3px solid var(--brd);border-top-color:var(--red);border-radius:50%;margin:0 auto 16px;animation:tvcspin .7s linear infinite}
+  @keyframes tvcspin{to{transform:rotate(360deg)}}
 
   /* ===== Gate ===== */
   .gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.2rem}
@@ -368,7 +472,8 @@
       <p id="gate-error" class="gate-error" role="alert"></p>
     </form>
     <div class="gate-note">
-      <p>🔒 A <strong>Public</strong> (limited/minimal) access key is enough — this only reads <em>your own</em> faction to confirm membership. You do <strong>not</strong> need to share a Full-access key.</p>
+      <p>🔒 A <strong>Public</strong> key is enough for the Hit List, War List, and the manual Value Calculator — this only reads <em>your own</em> faction to confirm membership.</p>
+      <p>💰 To let the <strong>Value Calculator auto-import your inventory</strong> (click an item to drop your whole stack into the selling basket), sign in with a <strong>Minimal</strong> access key or higher. You still do <strong>not</strong> need a Full-access key.</p>
       <p>Your key is stored only in this browser (localStorage) and is sent only to <code>api.torn.com</code>. <a id="gate-getkey-link" href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener noreferrer">Get / manage a key →</a></p>
       <p class="muted small">Heads up: this gate runs entirely in your browser and is <strong>not</strong> real access control — see the README.</p>
     </div>
@@ -511,14 +616,36 @@
   </div><!-- /#view-war -->
 
   <div id="view-calc" hidden>
-    <div class="toolbar" style="margin-bottom:.8rem">
-      <span class="muted small">Torn Value Calculator — embedded from your Torn-Value-Calculator project.</span>
-      <span class="spacer"></span>
-      <a class="btn btn-small" href="https://theg3isty.github.io/Torn-Value-Calculator/" target="_blank" rel="noopener noreferrer">Open full page ↗</a>
+    <div class="calc-head">
+      <div class="calc-title"><span class="calc-ico">TC</span><div><div class="calc-h1">Market Pricer</div><div class="calc-sub">Quick-sell value &amp; inventory calculator</div></div></div>
+      <div class="st"><div class="dot" id="dot"></div><span id="stTxt">Not loaded</span></div>
     </div>
-    <div class="calc-wrap">
-      <iframe id="calc-frame" title="Torn Value Calculator"></iframe>
+
+    <div class="err" id="err"></div>
+
+    <div class="tabs2" id="tabs" style="display:none">
+      <button class="tb active" id="tabInv" onclick="switchTab('inv')" type="button">🎒 My Inventory <span class="badge" id="cntI" style="display:none">0</span></button>
+      <button class="tb" id="tabMarket" onclick="switchTab('market')" type="button">All Items <span class="cnt" id="cntM"></span></button>
+      <button class="tb" id="tabBasket" onclick="switchTab('basket')" type="button">🛒 Selling Basket <span class="badge" id="cntB" style="display:none">0</span></button>
     </div>
+
+    <div class="ctrls" id="ctrls" style="display:none">
+      <div class="cg"><span class="lbl">Sell at</span><input type="range" class="sli" id="pctS" min="50" max="100" value="90" oninput="onPct()"><span class="pv" id="pctV">90%</span></div>
+      <div class="sw" id="searchWrap"><span class="ico">🔍</span><input type="text" class="si" id="sIn" placeholder="Search items…" oninput="render()"></div>
+      <select class="cs" id="catS" onchange="render()"><option value="">All Categories</option></select>
+      <button class="btn br" id="reloadBtn" onclick="calcReload()" type="button">↻ Reload</button>
+    </div>
+
+    <div class="chips" id="chips" style="display:none">
+      <div class="chip"><span class="cl">Total</span><span class="cv cr" id="sT">0</span></div>
+      <div class="chip"><span class="cl">Showing</span><span class="cv cg2" id="sS">0</span></div>
+      <div class="chip"><span class="cl">Refreshed</span><span class="cv cgl" id="sTm">--</span></div>
+    </div>
+
+    <div id="invView" style="display:none"></div>
+    <div id="marketView"></div>
+    <div id="basketView" style="display:none"></div>
+    <div class="loading" id="loader" style="display:none"><div class="spinner"></div><div id="loaderTxt">Loading…</div></div>
   </div><!-- /#view-calc -->
 </div>
 
@@ -1512,9 +1639,8 @@
     })[code] || ('War list error: ' + code + '.');
   }
 
-  const CALC_URL = 'https://theg3isty.github.io/Torn-Value-Calculator/';
-  // Lazy-load the calculator iframe the first time its tab is opened.
-  function loadCalc(){ const f = $('#calc-frame'); if(f && !f.getAttribute('src')) f.src = CALC_URL; }
+  // Load the integrated calculator (market + inventory) the first time its tab opens.
+  function loadCalc(){ if(window.calcInit) window.calcInit(); }
   function switchView(view){
     activeView = view;
     $('#view-hitlist').hidden = view !== 'hitlist';
@@ -2088,6 +2214,226 @@
     else { $('#gate').hidden = false; $('#app').hidden = true; }
   }
   document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+
+<!-- ============ VALUE CALCULATOR (integrated; uses the (s)hitlist login key) ============ -->
+<script>
+(function(){
+  'use strict';
+  let allItems=[], invItems=[], invError='', basket=[], pct=90;
+  let sortField='market_value', sortDir=-1, invSortF='total', invSortD=-1;
+  let currentTab='inv', basketUid=0, calcLoaded=false;
+  const $=id=>document.getElementById(id);
+  function showErr(m){const e=$('err');if(!e)return;e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),8000);}
+  function fmt(n){if(!n)return'—';if(n>=1e9)return'$'+(n/1e9).toFixed(2)+'B';if(n>=1e6)return'$'+(n/1e6).toFixed(2)+'M';if(n>=1e3)return'$'+(n/1e3).toFixed(1)+'K';return'$'+n.toLocaleString();}
+  function fmtN(n){if(!n)return'—';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return n.toLocaleString();}
+  function fmtExact(n){if(!n)return'$0';return'$'+n.toLocaleString();}
+  function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
+  // Reuse the (s)hitlist verified Torn login key — no separate key entry.
+  function calcKey(){try{return(localStorage.getItem('bk_hitlist_key')||'').trim();}catch(e){return'';}}
+
+  // Hooks the (s)hitlist calls when the Value Calc tab opens.
+  window.calcInit=function(){ if(calcLoaded)return; calcLoaded=true; loadAll(); };
+  window.calcReload=function(){ loadAll(); };
+
+  async function loadAll(){
+    const key=calcKey();
+    if(!key){ showErr('No verified key found — log out and back in.'); return; }
+    const rb=$('reloadBtn'); if(rb){rb.disabled=true;}
+    $('loader').style.display='block'; $('loaderTxt').textContent='Loading market + inventory…';
+    $('err').classList.remove('show'); setStatus(false,'Loading…');
+
+    // 1) Global market catalog (market_value per item; works with any key).
+    let gotMarket=false;
+    try{
+      const r=await fetch('https://api.torn.com/torn/?selections=items&key='+encodeURIComponent(key));
+      const data=await r.json();
+      if(data.error) throw new Error('API '+data.error.code+': '+data.error.error);
+      allItems=[]; const cats=new Set();
+      for(const [id,item] of Object.entries(data.items||{})){
+        if(item.market_value>0){ allItems.push({id,name:item.name||'?',type:item.type||'Other',market_value:item.market_value,circulation:item.circulation||0}); cats.add(item.type||'Other'); }
+      }
+      const sel=$('catS'); sel.innerHTML='<option value="">All Categories</option>';
+      [...cats].sort().forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;sel.appendChild(o);});
+      gotMarket=true;
+    }catch(e){ showErr(e.message); }
+
+    // 2) Your inventory (needs a Minimal+ key; price from inventory, catalog fallback).
+    invError=''; invItems=[];
+    try{
+      const r=await fetch('https://api.torn.com/user/?selections=inventory&key='+encodeURIComponent(key));
+      const data=await r.json();
+      if(data.error){ invError=(data.error.code===16)?'access':(data.error.error||'error'); }
+      else {
+        const priceOf={}; allItems.forEach(i=>priceOf[String(i.id)]=i.market_value);
+        (data.inventory||[]).forEach(it=>{
+          const id=String(it.ID!=null?it.ID:(it.id!=null?it.id:''));
+          if(!id) return;
+          const price=Number(it.market_price)||priceOf[id]||0;
+          invItems.push({id,name:it.name||'?',type:it.type||'Other',qty:Number(it.quantity)||0,market_price:price});
+        });
+      }
+    }catch(e){ invError='error'; }
+
+    $('loader').style.display='none'; if(rb){rb.disabled=false;}
+    if(gotMarket||invItems.length){
+      setStatus(true,'Connected');
+      $('tabs').style.display='flex'; $('ctrls').style.display='flex';
+      $('sT').textContent=allItems.length; $('sTm').textContent=new Date().toLocaleTimeString(); $('cntM').textContent='('+allItems.length+')';
+      updateInvBadge();
+      switchTab(invError?'market':'inv');   // land on Inventory unless it isn't accessible
+    }
+    render();
+  }
+  function setStatus(on,txt){ const d=$('dot'),t=$('stTxt'); if(d)d.classList.toggle('on',!!on); if(t)t.textContent=txt; }
+
+  /* ── Basket ── */
+  window.inlineAdd=function(itemId){ const inp=$('qty-'+itemId); const qty=Math.max(1,parseInt(inp&&inp.value)||1); const item=allItems.find(i=>i.id===itemId); if(!item)return; addToBasket(itemId,item.name,item.market_value,qty); if(inp)inp.value='1'; };
+  window.inlineKey=function(e,itemId){ if(e.key==='Enter')inlineAdd(itemId); };
+  window.inlineAddInv=function(itemId){ const inp=$('iqty-'+itemId); const it=invItems.find(i=>i.id===itemId); if(!it)return; const qty=Math.max(1,parseInt(inp&&inp.value)||1); addToBasket(itemId,it.name,it.market_price,qty); };
+  window.invKey=function(e,itemId){ if(e.key==='Enter')inlineAddInv(itemId); };
+  function addToBasket(id,name,market_price,qty){
+    const exists=basket.find(b=>String(b.id)===String(id)&&b.source==='market');
+    if(exists){ exists.qty+=qty; } else { basket.push({uid:++basketUid,id:String(id),name,market_price:market_price||0,qty,source:'market'}); }
+    updateBasketBadge(); render();
+  }
+  window.removeFromBasket=function(uid){ basket=basket.filter(b=>b.uid!==uid); updateBasketBadge(); render(); };
+  window.updateBasketQty=function(uid,val){ const b=basket.find(x=>x.uid===uid); if(!b)return; b.qty=Math.max(1,parseInt(val)||1); render(); };
+  window.updateBasketPrice=function(uid,val){ const b=basket.find(x=>x.uid===uid); if(!b)return; b.market_price=Math.max(0,parseInt(val)||0); render(); };
+  window.updateBasketName=function(uid,val){ const b=basket.find(x=>x.uid===uid); if(!b)return; b.name=val; };
+  window.clearBasket=function(){ basket=[]; updateBasketBadge(); render(); };
+  window.addManualRow=function(){ basket.push({uid:++basketUid,id:'manual_'+basketUid,name:'',market_price:0,qty:1,source:'manual'}); updateBasketBadge(); render(); };
+  function updateBasketBadge(){ const badge=$('cntB'); if(!badge)return; if(basket.length){badge.style.display='inline';badge.textContent=basket.length;} else badge.style.display='none'; }
+  function updateInvBadge(){ const badge=$('cntI'); if(!badge)return; if(invItems.length){badge.style.display='inline';badge.textContent=invItems.length;} else badge.style.display='none'; }
+  function isInBasket(id){ return basket.some(b=>String(b.id)===String(id)&&b.source==='market'); }
+  function getBasketQty(id){ const b=basket.find(x=>String(x.id)===String(id)&&x.source==='market'); return b?b.qty:0; }
+
+  /* ── Tabs ── */
+  window.switchTab=function(t){
+    currentTab=t;
+    $('tabInv').classList.toggle('active',t==='inv');
+    $('tabMarket').classList.toggle('active',t==='market');
+    $('tabBasket').classList.toggle('active',t==='basket');
+    $('invView').style.display=t==='inv'?'block':'none';
+    $('marketView').style.display=t==='market'?'block':'none';
+    $('basketView').style.display=t==='basket'?'block':'none';
+    $('catS').style.display=t==='market'?'':'none';
+    $('searchWrap').style.display=t==='basket'?'none':'block';
+    $('chips').style.display=t==='market'?'flex':'none';
+    render();
+  };
+  window.onPct=function(){ pct=parseInt($('pctS').value); $('pctV').textContent=pct+'%'; render(); };
+  window.doSort=function(field){ if(sortField===field)sortDir*=-1; else{ sortField=field; sortDir=(field==='name'||field==='type')?1:-1; } render(); };
+  window.doSortInv=function(field){ if(invSortF===field)invSortD*=-1; else{ invSortF=field; invSortD=(field==='name'||field==='type')?1:-1; } render(); };
+  function render(){ if(currentTab==='inv')renderInv(); else if(currentTab==='market')renderMarket(); renderBasket(); }
+  window.render=render;   // referenced by inline oninput/onchange on the search + category controls
+
+  function renderInv(){
+    if(invError){
+      const msg=(invError==='access')
+        ? 'Your API key can’t read your inventory. Log out and sign back in with a <b style="color:var(--grn)">Minimal-access</b> (or higher) Torn key to auto-import your items.'
+        : ('Couldn’t load your inventory — '+esc(invError)+'.');
+      $('invView').innerHTML='<div class="tw"><div class="empty"><div class="big">🔒</div>'+msg+'</div></div>';
+      return;
+    }
+    const q=$('sIn').value.toLowerCase().trim();
+    let list=invItems.map(it=>Object.assign({},it,{total:it.market_price*it.qty}))
+                     .filter(it=>!q||it.name.toLowerCase().includes(q)||it.id.includes(q));
+    list.sort((a,b)=>{let va=a[invSortF],vb=b[invSortF];if(typeof va==='string'){va=va.toLowerCase();vb=(vb||'').toLowerCase();}return va<vb?-invSortD:va>vb?invSortD:0;});
+    const totalVal=invItems.reduce((s,i)=>s+i.market_price*i.qty,0);
+    const si=f=>invSortF===f?'<span class="arr">'+(invSortD===1?'▲':'▼')+'</span>':'';
+    const sc=f=>invSortF===f?'sorted':'';
+    $('invView').innerHTML=
+      '<div class="chips" style="display:flex">'+
+      '<div class="chip"><span class="cl">Item types</span><span class="cv cg2">'+invItems.length+'</span></div>'+
+      '<div class="chip"><span class="cl">Inventory value</span><span class="cv cgl">'+fmt(totalVal)+'</span></div>'+
+      '<div class="chip"><span class="cl">At '+pct+'%</span><span class="cv cr">'+fmt(Math.floor(totalVal*pct/100))+'</span></div></div>'+
+      '<div class="tw"><div class="ts"><table><thead><tr>'+
+      '<th style="cursor:default;width:120px">Add all</th>'+
+      '<th class="'+sc('name')+'" onclick="doSortInv(\'name\')">Item'+si('name')+'</th>'+
+      '<th class="'+sc('type')+'" onclick="doSortInv(\'type\')">Type'+si('type')+'</th>'+
+      '<th class="'+sc('qty')+'" onclick="doSortInv(\'qty\')">You Own'+si('qty')+'</th>'+
+      '<th class="'+sc('market_price')+'" onclick="doSortInv(\'market_price\')">Market Value'+si('market_price')+'</th>'+
+      '<th class="'+sc('total')+'" onclick="doSortInv(\'total\')">Total'+si('total')+'</th>'+
+      '</tr></thead><tbody>'+list.map(it=>
+        '<tr>'+
+        '<td class="atb-cell"><div class="atb-row">'+
+          '<input type="text" class="atb-qty" id="iqty-'+it.id+'" value="'+it.qty+'" onkeydown="invKey(event,\''+it.id+'\')" title="How many to add (defaults to all you own)">'+
+          '<button class="add-btn" onclick="inlineAddInv(\''+it.id+'\')" title="Add to basket">+</button>'+
+        '</div></td>'+
+        '<td><div class="ic"><img class="iimg" src="https://www.torn.com/images/items/'+it.id+'/large.png" alt="" loading="lazy" onerror="this.style.display=\'none\'"><span class="inm">'+esc(it.name)+'</span></div></td>'+
+        '<td><span class="itp">'+esc(it.type)+'</span></td>'+
+        '<td class="ps">'+fmtN(it.qty)+'</td>'+
+        '<td class="pm">'+fmt(it.market_price)+'</td>'+
+        '<td style="color:var(--gold);font-weight:600">'+fmt(it.total)+'</td>'+
+        '</tr>'
+      ).join('')+'</tbody></table></div></div>'+(list.length===0?'<div class="empty"><div class="big">🎒</div>'+(q?'No items match.':'Your inventory is empty.')+'</div>':'');
+  }
+
+  function renderMarket(){
+    const q=$('sIn').value.toLowerCase().trim(),cat=$('catS').value;
+    let list=allItems.filter(it=>{const mN=!q||it.name.toLowerCase().includes(q)||it.id.includes(q);const mC=!cat||it.type===cat;return mN&&mC;});
+    list.sort((a,b)=>{let va=a[sortField],vb=b[sortField];if(typeof va==='string'){va=va.toLowerCase();vb=(vb||'').toLowerCase();}return va<vb?-sortDir:va>vb?sortDir:0;});
+    $('sS').textContent=list.length;
+    const show=list.slice(0,500);
+    const si=f=>sortField===f?'<span class="arr">'+(sortDir===1?'▲':'▼')+'</span>':'';
+    const sc=f=>sortField===f?'sorted':'';
+    $('marketView').innerHTML='<div class="tw"><div class="ts"><table><thead><tr>'+
+      '<th style="cursor:default;width:100px">Add</th>'+
+      '<th class="'+sc('name')+'" onclick="doSort(\'name\')">Item'+si('name')+'</th>'+
+      '<th class="'+sc('type')+'" onclick="doSort(\'type\')">Type'+si('type')+'</th>'+
+      '<th class="'+sc('market_value')+'" onclick="doSort(\'market_value\')">Market Value'+si('market_value')+'</th>'+
+      '<th>'+pct+'% Price</th><th>Discount</th>'+
+      '<th class="'+sc('circulation')+'" onclick="doSort(\'circulation\')">Circ'+si('circulation')+'</th>'+
+      '</tr></thead><tbody>'+show.map(it=>{
+        const sp=Math.floor(it.market_value*(pct/100)),diff=it.market_value-sp;
+        const inB=isInBasket(it.id),bQty=getBasketQty(it.id);
+        return '<tr><td class="atb-cell"><div class="atb-row">'+
+          '<input type="text" class="atb-qty" id="qty-'+it.id+'" value="1" onkeydown="inlineKey(event,\''+it.id+'\')">'+
+          '<button class="add-btn" onclick="inlineAdd(\''+it.id+'\')" title="Add to basket">+</button>'+
+          (inB?'<span class="atb-in">'+bQty+'</span>':'')+'</div></td>'+
+          '<td><div class="ic"><img class="iimg" src="https://www.torn.com/images/items/'+it.id+'/large.png" alt="" loading="lazy" onerror="this.style.display=\'none\'"><span class="inm">'+esc(it.name)+'</span></div></td>'+
+          '<td><span class="itp">'+esc(it.type)+'</span></td>'+
+          '<td class="pm">'+fmt(it.market_value)+'</td>'+
+          '<td class="ps">'+fmt(sp)+'</td>'+
+          '<td class="pd">-'+fmt(diff)+'</td>'+
+          '<td class="pc">'+fmtN(it.circulation)+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>'+(show.length===0?'<div class="empty"><div class="big">🔍</div>No items match.</div>':'');
+  }
+
+  function renderBasket(){
+    let totalMarket=0,totalSell=0,totalItems=0;
+    basket.forEach(b=>{ totalMarket+=b.market_price*b.qty; totalSell+=Math.floor(b.market_price*(pct/100))*b.qty; totalItems+=b.qty; });
+    const totalSaved=totalMarket-totalSell;
+    if(currentTab!=='basket')return;
+    if(basket.length===0){
+      $('basketView').innerHTML='<div class="basket-panel"><div class="empty"><div class="big">🛒</div>Your selling basket is empty.<br><span style="font-size:11px;margin-top:6px;display:inline-block">Open <b style="color:var(--grn)">My Inventory</b> and click <b style="color:var(--grn)">+</b> to add all of an item you own (editable), or browse All Items.</span></div></div>';
+      return;
+    }
+    let html='<div class="basket-panel"><div class="basket-header"><div class="bh-left"><span class="bh-icon">🛒</span><span class="bh-title">Selling Basket</span></div>';
+    html+='<div class="basket-actions"><button class="ba-btn ba-add" onclick="addManualRow()" type="button">+ Custom Item</button><button class="ba-btn ba-clear" onclick="clearBasket()" type="button">Clear All</button></div></div>';
+    html+='<div style="overflow-x:auto"><table class="basket-table"><thead><tr><th style="width:36px"></th><th>Item</th><th>Market Price</th><th>'+pct+'% Price</th><th>Qty</th><th>Subtotal</th></tr></thead><tbody>';
+    basket.forEach(b=>{
+      const sellUnit=Math.floor(b.market_price*(pct/100)),sub=sellUnit*b.qty,isManual=b.source==='manual';
+      html+='<tr><td><button class="bsk-rm" onclick="removeFromBasket('+b.uid+')" title="Remove" type="button">×</button></td>';
+      html+=isManual
+        ? '<td><input type="text" class="bsk-name-input" value="'+esc(b.name)+'" onchange="updateBasketName('+b.uid+',this.value)" placeholder="Item name"></td>'
+        : '<td><div class="ic"><img class="iimg" src="https://www.torn.com/images/items/'+b.id+'/large.png" alt="" loading="lazy" onerror="this.style.display=\'none\'"><span class="inm">'+esc(b.name)+'</span></div></td>';
+      html+=isManual
+        ? '<td><input type="number" class="bsk-price-input" value="'+b.market_price+'" min="0" onchange="updateBasketPrice('+b.uid+',this.value)" placeholder="Price"></td>'
+        : '<td class="pm">'+fmt(b.market_price)+'</td>';
+      html+='<td class="ps">'+fmt(sellUnit)+'</td>';
+      html+='<td><input type="number" class="bsk-qty" value="'+b.qty+'" min="1" onchange="updateBasketQty('+b.uid+',this.value)"></td>';
+      html+='<td style="color:var(--ora);font-weight:600">'+fmt(sub)+'</td></tr>';
+    });
+    html+='</tbody></table></div><div class="basket-footer"><div class="bf-stats">'+
+      '<div class="bf-stat bf-items"><div class="bf-label">Items</div><div class="bf-val">'+totalItems+'</div></div>'+
+      '<div class="bf-stat bf-market"><div class="bf-label">Market Total</div><div class="bf-val">'+fmtExact(totalMarket)+'</div></div>'+
+      '<div class="bf-stat bf-saved"><div class="bf-label">Buyer Saves</div><div class="bf-val">-'+fmtExact(totalSaved)+'</div></div></div>'+
+      '<div class="bf-stat bf-total"><div class="bf-label">Your Take at '+pct+'%</div><div class="bf-val">'+fmtExact(totalSell)+'</div></div></div></div>';
+    $('basketView').innerHTML=html;
+  }
 })();
 </script>
 </body>
