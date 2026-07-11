@@ -34,7 +34,10 @@ var SEED_WHITELIST = {
   '56875': { name: 'Boykisser Meetup', color: '#60a5fa' },  // blue
   '45990': { name: 'Static Hearts',    color: '#f472b6' }   // pink
 };
-var SEED_MASTERS = [4117638, 3558000];   // TheG3ISTY, Madilynn-SkyBby
+// Masters are assigned PER FACTION for the war lists: { "<playerId>": [factionId, ...] }.
+// A master controls only their assigned faction(s)' war roster (+ shared hit-list
+// curation). The OWNER is implicitly master of everything and isn't listed here.
+var SEED_MASTERS = { '3558000': [45990] };   // Madilynn-SkyBby masters Static Hearts
 // Palette auto-assigned to newly whitelisted factions (first unused wins).
 var FACTION_COLORS = ['#60a5fa', '#f472b6', '#c084fc', '#fbbf24', '#34d399', '#22d3ee', '#fb923c', '#a3e635'];
 var CFG_WHITELIST = 'cfg_whitelist';
@@ -70,13 +73,20 @@ function getWhitelist() {
   return SEED_WHITELIST;
 }
 function saveWhitelist(w) { PropertiesService.getScriptProperties().setProperty(CFG_WHITELIST, JSON.stringify(w)); }
-function getMasters() {
+// Master map: { "<playerId>": [factionId, ...] }. Sanitised on read/write.
+function getMasterMap() {
   var raw = PropertiesService.getScriptProperties().getProperty(CFG_MASTERS);
-  if (raw) { try { var a = JSON.parse(raw); if (a && a.length !== undefined) return arrNums(a); } catch (e) {} }
-  return SEED_MASTERS.slice();
+  if (raw) { try { var p = JSON.parse(raw); if (p && typeof p === 'object' && !(p instanceof Array)) return sanitizeMap(p); } catch (e) {} }
+  return sanitizeMap(SEED_MASTERS);
 }
-function saveMasters(a) { PropertiesService.getScriptProperties().setProperty(CFG_MASTERS, JSON.stringify(arrNums(a))); }
-function arrNums(a) { var o = []; for (var i = 0; i < a.length; i++) { var n = Number(a[i]); if (n) o.push(n); } return o; }
+function saveMasterMap(m) { PropertiesService.getScriptProperties().setProperty(CFG_MASTERS, JSON.stringify(sanitizeMap(m))); }
+function sanitizeMap(m) {
+  var out = {};
+  for (var k in m) { if (!m.hasOwnProperty(k)) continue; var pid = Number(k); if (!pid) continue;
+    var facs = arrNums(m[k] || []); if (facs.length) out[String(pid)] = facs; }
+  return out;
+}
+function arrNums(a) { var o = []; for (var i = 0; i < (a ? a.length : 0); i++) { var n = Number(a[i]); if (n && o.indexOf(n) === -1) o.push(n); } return o; }
 // Pick a stable colour for a new faction: first palette entry not already in use.
 function pickColor(wl) {
   var used = {};
@@ -120,8 +130,9 @@ function doPost(e) {
   var member = memberInfo(key);
   if (!member.ok) return json({ ok: false, error: 'not_verified' });
   var owner = isOwner(member);
-  var master = isMaster(member);
+  var master = isMaster(member);            // hit-list curation (any master)
   var wkey = warKeyOf(body);
+  var warMaster = isWarMaster(member, wkey); // war control (this faction only)
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
@@ -140,13 +151,13 @@ function doPost(e) {
       case 'setFaction': out = master ? setFaction(body) : forbiddenTargets(); break;
       // ---- War list (per-roster; body.war selects the faction id) ----
       case 'warStatus':       out = warStatus(member, wkey); break;
-      case 'warGenerate':     out = master ? warGenerate(body, wkey)     : forbidden(); break;
-      case 'warPullFriendly': out = master ? warPullFriendly(body, wkey) : forbidden(); break;
-      case 'warSetStats':     out = master ? warSetStats(body, wkey)     : forbidden(); break;
-      case 'warSetManual':    out = master ? warSetManual(body, wkey)    : forbidden(); break;
-      case 'warActivate':     out = master ? warSetActive(true, wkey)    : forbidden(); break;
-      case 'warDeactivate':   out = master ? warSetActive(false, wkey)   : forbidden(); break;
-      case 'warClear':        out = master ? warClear(wkey)              : forbidden(); break;
+      case 'warGenerate':     out = warMaster ? warGenerate(body, wkey)     : forbidden(); break;
+      case 'warPullFriendly': out = warMaster ? warPullFriendly(body, wkey) : forbidden(); break;
+      case 'warSetStats':     out = warMaster ? warSetStats(body, wkey)     : forbidden(); break;
+      case 'warSetManual':    out = warMaster ? warSetManual(body, wkey)    : forbidden(); break;
+      case 'warActivate':     out = warMaster ? warSetActive(true, wkey)    : forbidden(); break;
+      case 'warDeactivate':   out = warMaster ? warSetActive(false, wkey)   : forbidden(); break;
+      case 'warClear':        out = warMaster ? warClear(wkey)              : forbidden(); break;
       // ---- Admin (OWNER-ONLY): live whitelist + masters management ----
       case 'adminConfig':        out = owner ? adminConfig()             : forbidden(); break;
       case 'adminAddFaction':    out = owner ? adminAddFaction(body)     : forbidden(); break;
@@ -162,8 +173,9 @@ function doPost(e) {
   out.position = member.position;
   out.myFactionId = member.factionId;
   out.myFactionName = member.factionName;
-  out.isMaster = master;
+  out.isMaster = master;                    // may curate the hit list
   out.isOwner = owner;
+  out.warMasterOf = warMasterOf(member);    // faction war rosters this member controls
   out.factions = getWhitelist();   // keep the client's whitelist/colours fresh
   return json(out);
 }
@@ -208,10 +220,26 @@ function memberInfo(key) {
   return info;
 }
 function isOwner(member)  { return !!member && Number(member.playerId) === OWNER_ID; }
+// Hit-list curation ("any master"): owner, or a master of ANY faction. Hit-list
+// curation is intentionally NOT scoped per faction.
 function isMaster(member) {
   if (!member) return false;
-  if (Number(member.playerId) === OWNER_ID) return true;   // owner is always a master
-  return getMasters().indexOf(Number(member.playerId)) !== -1;
+  if (Number(member.playerId) === OWNER_ID) return true;
+  return !!getMasterMap()[String(Number(member.playerId))];
+}
+// War control is PER FACTION: owner, or a master assigned to this faction.
+function isWarMaster(member, fid) {
+  if (!member) return false;
+  if (Number(member.playerId) === OWNER_ID) return true;
+  var facs = getMasterMap()[String(Number(member.playerId))];
+  return !!facs && facs.indexOf(Number(fid)) !== -1;
+}
+// The faction war rosters this member may control (owner -> all whitelisted).
+function warMasterOf(member) {
+  if (!member) return [];
+  if (Number(member.playerId) === OWNER_ID) return Object.keys(getWhitelist()).map(Number);
+  var facs = getMasterMap()[String(Number(member.playerId))];
+  return facs ? facs.slice() : [];
 }
 function canRemove(position) {
   return REMOVE_ROLES.indexOf(String(position || '').trim().toLowerCase()) !== -1;
@@ -225,7 +253,7 @@ function cacheKey(key) {
 }
 
 /* ---------- Admin actions (owner-only; enforced in doPost) ---------- */
-function adminConfig() { return { ok: true, whitelist: getWhitelist(), masters: getMasters() }; }
+function adminConfig() { return { ok: true, whitelist: getWhitelist(), masters: getMasterMap() }; }
 function adminAddFaction(body) {
   var fid = parseInt(body.factionId, 10);
   if (!fid) return { ok: false, error: 'bad_faction' };
@@ -235,26 +263,43 @@ function adminAddFaction(body) {
   var color = (wl[String(fid)] && wl[String(fid)].color) ? wl[String(fid)].color : pickColor(wl);
   wl[String(fid)] = { name: res.name, color: color };
   saveWhitelist(wl);
-  return { ok: true, whitelist: wl, masters: getMasters() };
+  return { ok: true, whitelist: wl, masters: getMasterMap() };
 }
 function adminRemoveFaction(body) {
-  var fid = String(parseInt(body.factionId, 10) || 0);
+  var fid = parseInt(body.factionId, 10) || 0;
   var wl = getWhitelist();
-  if (wl[fid]) { delete wl[fid]; saveWhitelist(wl); }
-  return { ok: true, whitelist: wl, masters: getMasters() };
+  if (wl[String(fid)]) { delete wl[String(fid)]; saveWhitelist(wl); }
+  // Drop that faction from every master's assignments too.
+  var m = getMasterMap(), changed = false;
+  for (var k in m) { if (!m.hasOwnProperty(k)) continue;
+    var f = m[k].filter(function (x) { return x !== fid; });
+    if (f.length !== m[k].length) { changed = true; if (f.length) m[k] = f; else delete m[k]; } }
+  if (changed) saveMasterMap(m);
+  return { ok: true, whitelist: wl, masters: m };
 }
+// Assign a player as war master of a faction (adds to their faction list).
 function adminAddMaster(body) {
   var pid = parseInt(body.playerId, 10);
+  var fid = parseInt(body.factionId, 10);
   if (!pid) return { ok: false, error: 'bad_player' };
-  var m = getMasters();
-  if (m.indexOf(pid) === -1) { m.push(pid); saveMasters(m); }
+  if (!getWhitelist()[String(fid)]) return { ok: false, error: 'bad_faction' };
+  var m = getMasterMap();
+  var facs = m[String(pid)] || [];
+  if (facs.indexOf(fid) === -1) facs.push(fid);
+  m[String(pid)] = facs;
+  saveMasterMap(m);
   return { ok: true, whitelist: getWhitelist(), masters: m };
 }
+// Remove one faction assignment (factionId given) or the whole master (no factionId).
 function adminRemoveMaster(body) {
   var pid = parseInt(body.playerId, 10) || 0;
-  // Never remove the owner (they stay a master via isOwner regardless).
-  var m = getMasters().filter(function (x) { return x !== pid || x === OWNER_ID; });
-  saveMasters(m);
+  var fid = parseInt(body.factionId, 10) || 0;
+  var m = getMasterMap();
+  if (m[String(pid)]) {
+    if (fid) { m[String(pid)] = m[String(pid)].filter(function (x) { return x !== fid; }); if (!m[String(pid)].length) delete m[String(pid)]; }
+    else delete m[String(pid)];
+    saveMasterMap(m);
+  }
   return { ok: true, whitelist: getWhitelist(), masters: m };
 }
 // Look up a faction's name from Torn using the owner's key.
@@ -534,7 +579,7 @@ function warEnvelope(wkey) {
   };
 }
 function warStatus(member, wkey) {
-  var master = isMaster(member);
+  var master = isWarMaster(member, wkey);
   var m = warMeta(wkey);
   var out = { ok: true, war: wkey, active: m.active, master: master };
   if (m.active || master) {

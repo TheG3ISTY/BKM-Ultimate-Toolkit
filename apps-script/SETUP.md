@@ -44,12 +44,17 @@ panel — adding a faction or a master needs **no code change and no redeploy**.
   Root of trust: always passes the gate, is always a master, is the only one who
   sees the Admin panel, and can never be removed or locked out. This is the ONLY
   thing you edit in code + redeploy for.
-- **Masters** (warmaster == listmaster): full control of all war rosters + hit-list
-  curation (delete / Manual / Shared / Faction). Owner adds/removes them in Admin.
+- **Masters** are assigned **per faction** for the war lists: a master controls
+  only their assigned faction(s)' war roster. They can *also* curate the shared
+  hit list (delete / Manual / Shared / Faction) — hit-list curation is **not**
+  scoped per faction, since a shared list can't be. Owner assigns/unassigns them
+  in Admin (stored as `{ playerId: [factionId, …] }`).
 - **Members**: anyone in a whitelisted faction. Can add targets, edit name/notes,
   and refresh stats.
 - Seeds (used only on first run, before anything is saved): whitelist =
-  Boykisser Meetup `#56875` + Static Hearts `#45990`; masters = `[4117638, 3558000]`.
+  Boykisser Meetup `#56875` + Static Hearts `#45990`; masters =
+  `{ "3558000": [45990] }` (Madilynn-SkyBby → Static Hearts). The owner is
+  implicit and never listed.
 
 **Hit list:** each target records **which faction added it** (auto-detected from
 the caller's key). A **Shared** checkbox (master-only) marks a target as an enemy
@@ -64,9 +69,10 @@ enemy faction ID and is **master-controlled**: only that roster's warmaster may
 generate, update, activate, or clear it — everyone else gets a **read-only**
 view. Non-masters only see a roster once its master has **activated** it.
 
-- Masters are managed live in the **Admin** panel (owner only), not in code.
-  **Warmaster and listmaster are one unified role**: a master controls *all* war
-  rosters *and* hit-list curation. Each master uses their own API key.
+- Masters are managed live in the **Admin** panel (owner only), not in code, and
+  are **assigned per faction**: a war master controls only their assigned faction's
+  roster (hit-list curation stays open to any master). Each master uses their own
+  API key.
 - There is **one war roster per whitelisted faction**, keyed by faction id. The
   two original factions keep their legacy sheet names (`War`, `War_SH`); any newly
   whitelisted faction gets a `War_<id>` tab auto-created on first use.
