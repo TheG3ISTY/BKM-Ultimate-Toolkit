@@ -2322,8 +2322,13 @@
       if(data.error){ invError=(data.error.code===16)?'access':('Torn error '+data.error.code+': '+(data.error.error||'unknown')); }
       else {
         const priceOf={}; allItems.forEach(i=>priceOf[String(i.id)]=i.market_value);
-        (data.inventory||[]).forEach(it=>{
-          const id=String(it.ID!=null?it.ID:(it.id!=null?it.id:''));
+        // Torn returns inventory as either an array OR an object map — normalise.
+        const raw=data.inventory;
+        const entries = Array.isArray(raw) ? raw.map(it=>[null,it])
+                      : (raw && typeof raw==='object' ? Object.entries(raw) : []);
+        entries.forEach(([k,it])=>{
+          if(!it||typeof it!=='object') return;
+          const id=String(it.ID!=null?it.ID:(it.id!=null?it.id:(k!=null?k:'')));
           if(!id) return;
           const price=Number(it.market_price)||priceOf[id]||0;
           invItems.push({id,name:it.name||'?',type:it.type||'Other',qty:Number(it.quantity)||0,market_price:price});
