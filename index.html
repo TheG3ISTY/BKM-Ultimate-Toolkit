@@ -670,7 +670,7 @@
       not_verified: 'The shared list rejected your key (faction check failed). Log out and back in.',
       missing_key:  'No key found — log out and back in.',
       busy:         'The list is busy — try again in a moment.',
-      forbidden:    'Only Boykisser, Dommy Mommy, Leader, and Co-Leader can remove targets.',
+      forbidden:    'Only the list master can delete targets or change Manual / Shared / faction.',
       not_verified_faction: 'Your key isn’t in a whitelisted faction.',
       bad_faction:  'Unknown faction for that target.',
     })[code] || ('Shared-list error: ' + code + '.');
@@ -1030,6 +1030,7 @@
     await mutate('update', { id: String(id), why: value });
   }
   async function removeTarget(t){
+    if(!war.bkm.master) return;   // list master only (server-enforced)
     const id = extractId(t.name);
     if(id == null) return;
     const data = await mutate('delete', { id: String(id) });
@@ -1141,15 +1142,17 @@
     lbl.appendChild(cb); lbl.appendChild(document.createTextNode('Shared'));
     return lbl;
   }
-  // Toggle a hit-list target's manual override (open to any verified member, like Refresh/Add).
+  // Toggle a hit-list target's manual override (list master only; server-enforced).
   async function setManual(t, on){
+    if(!war.bkm.master) return;
     const id = extractId(t.name);
     if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
     t.manual = on; render();
     await mutate('setManual', { id: String(id), manual: on });
   }
-  // Toggle a hit-list target's Shared flag (enemy of both factions). Any verified member.
+  // Toggle a hit-list target's Shared flag (enemy of both factions; list master only).
   async function setShared(t, on){
+    if(!war.bkm.master) return;
     const id = extractId(t.name);
     if(id == null){ toast('This row has no valid target ID.', 'err'); return; }
     t.shared = on; render();
@@ -1167,8 +1170,9 @@
     const data = await mutate('setFaction', { id: String(id), faction: next });
     if(data.ok) toast('Moved ' + t.name.replace(/\s*\[\d+\]\s*$/, '') + ' to ' + factionName(next) + '.', 'ok');
   }
-  // Save a hand-entered stat for a hit-list target (implies manual override on).
+  // Save a hand-entered stat for a hit-list target (implies manual override on; master only).
   async function saveManualStat(t, raw){
+    if(!war.bkm.master) return;
     const id = extractId(t.name);
     if(id == null) return;
     const num = parseStatInput(raw);
@@ -1203,9 +1207,9 @@
     tdWhy.appendChild(whyIn);
     tr.appendChild(tdWhy);
 
-    // Stat estimate (hand-editable when Manual override is on)
+    // Stat estimate (hand-editable only by the master when Manual override is on)
     const tdStat = document.createElement('td'); tdStat.className = 'c-stat';
-    if(t.manual){
+    if(t.manual && war.bkm.master){
       tdStat.appendChild(manualStatInput(t, val => saveManualStat(t, val)));
     } else {
       const statSpan = document.createElement('span');
@@ -1213,6 +1217,7 @@
       if(t.statEstimate == null) statSpan.classList.add('na');
       else statSpan.title = displayHuman ? Number(t.statEstimate).toLocaleString('en-US') : (t.statHuman ? ('≈ ' + t.statHuman) : '');
       tdStat.appendChild(statSpan);
+      if(t.manual){ const mt = document.createElement('span'); mt.className = 'manual-tag'; mt.textContent = '✎'; mt.title = 'Manually entered'; tdStat.appendChild(mt); }
     }
     tr.appendChild(tdStat);
 
@@ -1250,9 +1255,11 @@
     tdAtk.appendChild(atk);
     tr.appendChild(tdAtk);
 
-    // Faction switch (master) + Shared + Manual override + Refresh + Delete
+    // Master-only curation (Faction switch + Shared + Manual + Delete); Refresh
+    // stays open to everyone. All master actions are enforced server-side too.
     const tdAct = document.createElement('td'); tdAct.className = 'c-act';
-    if(war.bkm.master){   // list master only (enforced server-side too)
+    const master = war.bkm.master;
+    if(master){
       const other = otherFaction(t.faction);
       const fb = document.createElement('button');
       fb.className = 'btn btn-small fac-switch ' + (t.faction === 45990 ? 'f-sh' : 'f-bkm');
@@ -1260,9 +1267,9 @@
       fb.title = 'Faction: ' + factionName(t.faction) + ' — click to move to ' + factionName(other);
       fb.addEventListener('click', () => switchTargetFaction(t));
       tdAct.appendChild(fb);
+      tdAct.appendChild(sharedToggle(t, on => setShared(t, on)));
+      tdAct.appendChild(manualToggle(t, on => setManual(t, on)));
     }
-    tdAct.appendChild(sharedToggle(t, on => setShared(t, on)));
-    tdAct.appendChild(manualToggle(t, on => setManual(t, on)));
     if(!t.manual){   // manual rows are excluded from refreshes, so no per-row Refresh
       const ref = document.createElement('button');
       ref.className = 'btn btn-small row-refresh';
@@ -1272,7 +1279,7 @@
       ref.addEventListener('click', () => refreshOne(t));
       tdAct.appendChild(ref);
     }
-    if(mayRemove){   // only shown to Boykisser / Dommy Mommy / Leader / Co-Leader (enforced server-side too)
+    if(master){   // delete restricted to the list master (enforced server-side too)
       const del = document.createElement('button');
       del.className = 'icon-btn danger'; del.title = 'Remove target'; del.setAttribute('aria-label', 'Remove target'); del.textContent = '✕';
       del.addEventListener('click', () => { if(confirm('Remove ' + t.name + '?')) removeTarget(t); });

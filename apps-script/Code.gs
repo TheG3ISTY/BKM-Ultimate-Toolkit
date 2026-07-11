@@ -75,12 +75,13 @@ function doPost(e) {
       case 'list':     out = { ok: true, targets: readAll() }; break;
       case 'add':      out = addTarget(body, member); break;
       case 'update':   out = updateTarget(body); break;
-      case 'delete':   out = mayRemove ? deleteTarget(body)
-                                       : { ok: false, error: 'forbidden', targets: readAll() }; break;
+      // Delete + the curation flags (Manual / Shared / Faction) are MASTER-ONLY.
+      // Any verified member can still add, edit, and refresh stats.
+      case 'delete':   out = master ? deleteTarget(body) : forbiddenTargets(); break;
       case 'setStats': out = setStats(body); break;
-      case 'setManual': out = setManual(body); break;
-      case 'setShared': out = setShared(body); break;
-      case 'setFaction': out = master ? setFaction(body) : forbidden(); break;
+      case 'setManual': out = master ? setManual(body)  : forbiddenTargets(); break;
+      case 'setShared': out = master ? setShared(body)  : forbiddenTargets(); break;
+      case 'setFaction': out = master ? setFaction(body) : forbiddenTargets(); break;
       // ---- War list (per-roster; body.war selects 'bkm' | 'sh') ----
       case 'warStatus':       out = warStatus(member, wkey); break;
       case 'warGenerate':     out = master ? warGenerate(body, wkey)     : forbidden(); break;
@@ -149,6 +150,8 @@ function isWarMaster(member, wkey) {
   return !!member && Number(member.playerId) === warCfg(wkey).master;
 }
 function forbidden() { return { ok: false, error: 'forbidden' }; }
+// Forbidden, but still hand back the current list so the client re-syncs to truth.
+function forbiddenTargets() { return { ok: false, error: 'forbidden', targets: readAll() }; }
 function cacheKey(key) {
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, key);
   return 'v_' + Utilities.base64Encode(d);
