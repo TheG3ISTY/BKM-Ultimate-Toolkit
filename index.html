@@ -431,6 +431,33 @@
   .fac-chip-x{appearance:none;background:transparent;border:none;color:inherit;cursor:pointer;font-size:1rem;line-height:.7;padding:0 0 0 .1em;opacity:.7}
   .fac-chip-x:hover{opacity:1}
   .fac-chips:empty::after{content:'no factions';color:var(--faint);font-family:var(--sans);font-size:.75rem;font-weight:400}
+
+  /* ===== War payout calculator ===== */
+  .payout-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:1rem 1.1rem;margin-bottom:1rem}
+  .payout-panel h3{margin:0 0 .8rem;font-size:.9rem;font-weight:700;color:var(--text)}
+  .payout-params{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:.7rem}
+  .pp-field{display:flex;flex-direction:column;gap:.25rem}
+  .pp-field label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .pp-field .input{font-family:var(--mono);text-align:right}
+  .pp-field .pp-ro{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.6rem .7rem;font-family:var(--mono);text-align:right;font-size:.95rem}
+  table.payout{min-width:980px}
+  table.payout td{padding:.3rem .45rem}
+  table.payout .cell-input{padding:.35rem .4rem}
+  table.payout .cell-num{width:5rem;text-align:right;font-family:var(--mono)}
+  table.payout .cell-name{width:12rem}
+  table.payout .p-num{text-align:right;font-family:var(--mono);white-space:nowrap;color:var(--muted)}
+  table.payout .p-total{text-align:right;font-family:var(--mono);font-weight:700;color:var(--ok);white-space:nowrap}
+  table.payout .p-neg{color:var(--danger)}
+  table.payout thead th.num, table.payout td.num{text-align:right}
+  .payout-summary{display:flex;gap:.7rem;flex-wrap:wrap;margin:1rem 0}
+  .psum{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.55rem .85rem;min-width:130px}
+  .psum .pl{display:block;font-size:.66rem;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
+  .psum .pvv{font-size:1.02rem;font-weight:700;font-family:var(--mono)}
+  .psum.big .pvv{color:var(--ok)}
+  .payout-actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.9rem}
+  .payout-empty{text-align:center;color:var(--muted);padding:2.6rem 1rem}
+  .payout-empty .big{font-size:1.8rem;display:block;margin-bottom:.5rem}
+  .payout-saved{font-size:.8rem;color:var(--faint)}
   details.advanced{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2);margin-bottom:.3rem}
   details.advanced>summary{cursor:pointer;padding:.6rem .8rem;font-size:.82rem;font-weight:600;color:var(--muted);list-style:none;user-select:none}
   details.advanced>summary::-webkit-details-marker{display:none}
@@ -501,6 +528,7 @@
   <nav class="tabs">
     <button class="tab active" id="tab-hitlist" type="button">🎯 Hit List</button>
     <button class="tab" id="tab-war" type="button">⚔️ War List</button>
+    <button class="tab" id="tab-payout" type="button" hidden>💵 Payout</button>
     <button class="tab" id="tab-calc" type="button">💰 Value Calc</button>
     <button class="tab" id="tab-settings" type="button">⚙️ Settings</button>
   </nav>
@@ -609,6 +637,17 @@
       <span class="foot-note">War list — generated &amp; controlled by the master; visible to the faction only when activated.</span>
     </footer>
   </div><!-- /#view-war -->
+
+  <div id="view-payout" hidden>
+    <nav class="tabs subtabs" id="payout-subtabs"></nav>
+    <section class="controls">
+      <div class="banner" id="payout-info" hidden>
+        <span id="payout-info-text"></span>
+        <span id="payout-active-pill" class="small war-pill"></span>
+      </div>
+      <div id="payout-body"></div>
+    </section>
+  </div><!-- /#view-payout -->
 
   <div id="view-calc" hidden>
     <div class="calc-head">
@@ -735,7 +774,7 @@
   const DEFAULT_STATS_URL = 'https://ffscouter.com/api/v1/get-stats?key={KEY}&targets={IDS}';
   // Shared Google Sheet backend (Apps Script web app). Every call is verified
   // server-side against the current whitelist.
-  const SHEET_API = 'https://script.google.com/macros/s/AKfycby3wkUQjrHlY21G-Cld7Gji-n4ak-hpNLgtoJzLymbFn8fxkN8KkdgdZGzO-arqVtpBtg/exec';
+  const SHEET_API = 'https://script.google.com/macros/s/AKfycbwzWw7Bc_6iS7HpSgvj45fAqCYmbcVm48s232y0pBLR_59fBE29mzBCHiYFP8qasXg6SA/exec';
   const CHUNK_SIZE = 200;          // FFScouter allows up to 205 IDs / request
   const CHUNK_SPACING_MS = 3500;   // spacing when chunking -> well under 20/min
   const RATE_MAX = 20;             // hard cap: 20 requests / 60s / IP (FFScouter)
@@ -786,6 +825,14 @@
   let warShowFriendly = true;               // war view: include our own faction (green) rows
   const statusById = new Map();   // id -> { state, color, description, until, at } — live Torn status (ephemeral, not shared)
   const statusInFlight = new Set();
+
+  // ---- War payout calculator (one per faction) ----
+  let activePayout = 0;                     // faction id of the active payout sub-tab
+  const payout = {};                        // fid -> { params, members, active, master, canRead, updatedAt, loaded }
+  const blankPayoutParams = () => ({ warPayout:0, expenses:0, memberPct:80, factionPct:20, hitPct:50, respectPct:50, salaryEach:0, xanaxPrice:0 });
+  const blankPayout = () => ({ params:blankPayoutParams(), members:[], active:false, master:false, canRead:false, updatedAt:'', loaded:false });
+  const curPayout = () => payout[activePayout] || blankPayout();
+  let payoutDirty = false;                  // unsaved edits on the active payout
 
   /* ===================== Small helpers ===================== */
   const $ = s => document.querySelector(s);
@@ -1663,13 +1710,16 @@
     activeView = view;
     $('#view-hitlist').hidden = view !== 'hitlist';
     $('#view-war').hidden = view !== 'war';
+    $('#view-payout').hidden = view !== 'payout';
     $('#view-calc').hidden = view !== 'calc';
     $('#view-settings').hidden = view !== 'settings';
     $('#tab-hitlist').classList.toggle('active', view === 'hitlist');
     $('#tab-war').classList.toggle('active', view === 'war');
+    $('#tab-payout').classList.toggle('active', view === 'payout');
     $('#tab-calc').classList.toggle('active', view === 'calc');
     $('#tab-settings').classList.toggle('active', view === 'settings');
     if(view === 'war') renderWar();
+    else if(view === 'payout') loadPayout();
     else if(view === 'calc') loadCalc();
     else if(view === 'settings') openSettings();
     else render();
@@ -1737,6 +1787,7 @@
     const W = curWar();
     const mc = $('#war-master-controls'); if(mc) mc.hidden = !isWarMaster(activeWar);
     const sf = $('#settings-ff'); if(sf) sf.hidden = !isMaster;   // FFScouter key: warmasters only
+    const pt = $('#tab-payout'); if(pt) pt.hidden = payoutFactionIds().length === 0;
     const ab = $('#war-activate-btn');
     if(ab){
       ab.textContent = W.active ? 'Deactivate (hide from faction)' : 'Activate for faction';
@@ -2083,6 +2134,257 @@
     tbody.appendChild(frag);
   }
 
+  /* ===================== War payout calculator ===================== */
+  const PAYOUT_FIELDS = [
+    {k:'warPayout',  label:'War payout ($)'},
+    {k:'expenses',   label:'War expenses ($)'},
+    {k:'salaryEach', label:'Salary — each ($)'},
+    {k:'xanaxPrice', label:'Xanax price ($)'},
+    {k:'memberPct',  label:'Member share (%)'},
+    {k:'factionPct', label:'Faction share (%)'},
+    {k:'hitPct',     label:'Hit split (%)'},
+    {k:'respectPct', label:'Respect split (%)'},
+  ];
+  const pnum = (v,d) => { const n = Number(v); return isFinite(n) ? n : (d||0); };
+  const money = n => (n<0?'-$':'$') + Math.round(Math.abs(n)).toLocaleString('en-US');
+  const rate2 = n => '$' + (Math.round(n*100)/100).toLocaleString('en-US',{maximumFractionDigits:2});
+  // Payouts this member can see: factions they war-master + their own.
+  function payoutFactionIds(){ const allow=new Set([...warMasterOf, Number(myFactionId)]); return factionIds().filter(f=>allow.has(Number(f))); }
+  function isPayMaster(fid){ return isWarMaster(fid); }   // payout edit == war-master of that faction
+
+  // Pure calculation — mirrors the spreadsheet exactly.
+  function computePayout(P, members){
+    const net = pnum(P.warPayout) - pnum(P.expenses);
+    const memberShare = net * pnum(P.memberPct)/100;
+    const factionShare = net * pnum(P.factionPct)/100;
+    const salaries = members.reduce((s,m)=> s + pnum(P.salaryEach)*pnum(m.mult,1), 0);
+    const distributable = memberShare - salaries;
+    const hitPool = distributable * pnum(P.hitPct)/100;
+    const respPool = distributable * pnum(P.respectPct)/100;
+    const totalHits = members.reduce((s,m)=> s + pnum(m.hits), 0);
+    const totalRespAdj = members.reduce((s,m)=> s + (pnum(m.respect)-pnum(m.chain)), 0);
+    const hitRate = totalHits>0 ? hitPool/totalHits : 0;
+    const respRate = totalRespAdj>0 ? respPool/totalRespAdj : 0;
+    const rows = members.map(m=>{
+      const respAdj = pnum(m.respect)-pnum(m.chain);
+      const hitPay = pnum(m.hits)*hitRate;
+      const respPay = respAdj*respRate;
+      const xanDed = pnum(m.xanax)*pnum(P.xanaxPrice);
+      const salary = pnum(P.salaryEach)*pnum(m.mult,1);
+      return { respAdj, hitPay, respPay, xanDed, salary, total: hitPay+respPay-xanDed+salary };
+    });
+    return { net, memberShare, factionShare, salaries, hitRate, respRate, rows, grandTotal: rows.reduce((s,r)=>s+r.total,0) };
+  }
+
+  function applyPayoutData(fid, data){
+    if(!data) return;
+    const P = payout[fid] || (payout[fid]=blankPayout());
+    if(typeof data.active==='boolean') P.active=data.active;
+    if(typeof data.master==='boolean') P.master=data.master;
+    if(typeof data.canRead==='boolean') P.canRead=data.canRead;
+    if(typeof data.updatedAt==='string') P.updatedAt=data.updatedAt;
+    if(data.params && typeof data.params==='object') P.params=Object.assign(blankPayoutParams(), data.params);
+    if(Array.isArray(data.members)) P.members=data.members.map(m=>({ name:String(m.name||''), mult:pnum(m.mult,1), hits:pnum(m.hits), respect:pnum(m.respect), chain:pnum(m.chain), xanax:pnum(m.xanax) }));
+    P.loaded=true;
+    if(Number(fid)===Number(activePayout)){ payoutDirty=false; renderPayout(); }
+  }
+  async function syncPayout(fid){
+    setSync(true);
+    try{ const data=await sheetCall('payoutStatus',{pay:fid}); noteRole(data); if(data&&data.ok) applyPayoutData(fid,data); }
+    catch(err){ /* best-effort */ }
+    finally{ setSync(false); }
+  }
+  function ensurePayoutState(){ const ids=payoutFactionIds(); if(!activePayout || ids.indexOf(Number(activePayout))===-1) activePayout=ids[0]||0; }
+  function renderPayoutSubtabs(){
+    const box=$('#payout-subtabs'); if(!box) return;
+    box.innerHTML='';
+    for(const fid of payoutFactionIds()){
+      const b=document.createElement('button');
+      b.type='button'; b.className='tab subtab'+(Number(fid)===Number(activePayout)?' active':'');
+      b.dataset.pay=String(fid); b.textContent='💵 '+factionName(fid);
+      if(Number(fid)===Number(activePayout)){ b.style.background='linear-gradient(135deg,'+facColor(fid)+',var(--accent-2))'; b.style.color='#0a1020'; }
+      b.addEventListener('click',()=>switchPayout(fid));
+      box.appendChild(b);
+    }
+  }
+  function switchPayout(fid){
+    activePayout=Number(fid)||(payoutFactionIds()[0]||0);
+    payoutDirty=false;
+    renderPayoutSubtabs();
+    if(activePayout && !(payout[activePayout]&&payout[activePayout].loaded)) syncPayout(activePayout);
+    renderPayout();
+  }
+  function loadPayout(){
+    ensurePayoutState();
+    renderPayoutSubtabs();
+    if(activePayout && !(payout[activePayout]&&payout[activePayout].loaded)) syncPayout(activePayout);
+    renderPayout();
+  }
+  function updatePayoutInfo(){
+    const info=$('#payout-info'), txt=$('#payout-info-text'), pill=$('#payout-active-pill');
+    if(!info) return;
+    const P=curPayout();
+    if(!activePayout){ info.hidden=true; return; }
+    info.hidden=false;
+    txt.textContent='💵 '+factionName(activePayout)+' war payout'+(P.updatedAt?(' · saved '+P.updatedAt):'');
+    if(P.active){ pill.textContent='● Published to faction'; pill.style.color='var(--ok)'; }
+    else if(isPayMaster(activePayout)){ pill.textContent='○ Draft — only warmasters see this'; pill.style.color='var(--warn)'; }
+    else pill.textContent='';
+  }
+  let pcRefs=[], psRefs={};   // computed-cell refs for in-place refresh (no re-render per keystroke)
+  function renderPayout(){
+    const box=$('#payout-body'); if(!box) return;
+    updatePayoutInfo();
+    pcRefs=[]; psRefs={};
+    if(!activePayout){ box.innerHTML='<div class="payout-empty">No faction selected.</div>'; return; }
+    const P=curPayout(), master=isPayMaster(activePayout);
+    if(!master && !P.canRead){
+      box.innerHTML='<div class="payout-empty"><span class="big">🔒</span>'+(P.active?'You can’t view this faction’s payout.':'This faction’s payout hasn’t been published yet — your warmasters publish it after the war.')+'</div>';
+      return;
+    }
+    box.innerHTML='';
+    box.appendChild(buildPayoutParams(P, master));
+    box.appendChild(buildPayoutTable(P, master));
+    box.appendChild(buildPayoutSummary());
+    if(master) box.appendChild(buildPayoutActions(P));
+    refreshPayoutComputed();
+  }
+  function buildPayoutParams(P, master){
+    const panel=document.createElement('div'); panel.className='payout-panel';
+    const h=document.createElement('h3'); h.textContent='Parameters'+(master?'':' (set by your warmasters)'); panel.appendChild(h);
+    const grid=document.createElement('div'); grid.className='payout-params';
+    for(const f of PAYOUT_FIELDS){
+      const fld=document.createElement('div'); fld.className='pp-field';
+      const lbl=document.createElement('label'); lbl.textContent=f.label; fld.appendChild(lbl);
+      if(master){
+        const inp=document.createElement('input'); inp.type='text'; inp.inputMode='decimal'; inp.className='input';
+        inp.value=String(P.params[f.k]!=null?P.params[f.k]:'');
+        inp.addEventListener('input',()=>{ P.params[f.k]=pnum(inp.value); payoutDirty=true; refreshPayoutComputed(); });
+        fld.appendChild(inp);
+      } else {
+        const ro=document.createElement('div'); ro.className='pp-ro';
+        ro.textContent=(f.k.slice(-3)==='Pct')?(pnum(P.params[f.k])+'%'):money(pnum(P.params[f.k]));
+        fld.appendChild(ro);
+      }
+      grid.appendChild(fld);
+    }
+    panel.appendChild(grid);
+    return panel;
+  }
+  function buildPayoutTable(P, master){
+    const wrap=document.createElement('div'); wrap.className='table-wrap';
+    const table=document.createElement('table'); table.className='targets payout';
+    const cols=['Member','Mult','Hits','Respect','Chain','Xanax','Resp.Adj','Hit $','Respect $','Xanax −$','Salary','Total'];
+    const thead=document.createElement('thead'); const tr=document.createElement('tr');
+    cols.forEach((c,i)=>{ const th=document.createElement('th'); th.textContent=c; if(i>=1) th.className='num'; tr.appendChild(th); });
+    if(master){ const th=document.createElement('th'); th.setAttribute('aria-label','Remove'); tr.appendChild(th); }
+    thead.appendChild(tr); table.appendChild(thead);
+    const tbody=document.createElement('tbody');
+    P.members.forEach((m,idx)=> tbody.appendChild(buildPayoutRow(P,m,idx,master)));
+    if(P.members.length===0){ const er=document.createElement('tr'); er.className='empty-row'; const td=document.createElement('td'); td.colSpan=master?13:12; td.textContent=master?'No members yet — use “+ Add member” or “Import war roster”.':'No members in this payout.'; er.appendChild(td); tbody.appendChild(er); }
+    table.appendChild(tbody); wrap.appendChild(table);
+    return wrap;
+  }
+  function buildPayoutRow(P,m,idx,master){
+    const tr=document.createElement('tr');
+    const mkInput=(field,cls,val)=>{ const inp=document.createElement('input'); inp.type='text'; inp.className='cell-input '+cls; inp.value=String(val); if(field!=='name') inp.inputMode='decimal';
+      inp.addEventListener('input',()=>{ m[field]=(field==='name')?inp.value:pnum(inp.value,field==='mult'?1:0); payoutDirty=true; refreshPayoutComputed(); }); return inp; };
+    const editCell=(field,cls,val)=>{ const td=document.createElement('td');
+      if(master){ td.appendChild(mkInput(field,cls,val)); }
+      else if(field==='name'){ td.textContent=String(val); }
+      else { td.className='p-num'; td.textContent=pnum(val).toLocaleString('en-US'); }
+      return td; };
+    tr.appendChild(editCell('name','cell-name',m.name||''));
+    tr.appendChild(editCell('mult','cell-num',m.mult));
+    tr.appendChild(editCell('hits','cell-num',m.hits));
+    tr.appendChild(editCell('respect','cell-num',m.respect));
+    tr.appendChild(editCell('chain','cell-num',m.chain));
+    tr.appendChild(editCell('xanax','cell-num',m.xanax));
+    const refs={};
+    ['respAdj','hitPay','respPay','xanDed','salary','total'].forEach(key=>{ const td=document.createElement('td'); td.className=(key==='total')?'p-total':'p-num'; tr.appendChild(td); refs[key]=td; });
+    pcRefs[idx]=refs;
+    if(master){ const td=document.createElement('td'); td.className='c-act'; const del=document.createElement('button'); del.className='icon-btn danger'; del.textContent='✕'; del.title='Remove member';
+      del.addEventListener('click',()=>{ P.members.splice(idx,1); payoutDirty=true; renderPayout(); }); td.appendChild(del); tr.appendChild(td); }
+    return tr;
+  }
+  function buildPayoutSummary(){
+    const box=document.createElement('div'); box.className='payout-summary';
+    const chips=[['net','Net pool'],['memberShare','Member share'],['factionShare','Faction keeps'],['salaries','Salaries'],['hitRate','Per hit'],['respRate','Per respect'],['grandTotal','Paid out',true]];
+    for(const [k,label,big] of chips){
+      const c=document.createElement('div'); c.className='psum'+(big?' big':'');
+      const l=document.createElement('span'); l.className='pl'; l.textContent=label;
+      const v=document.createElement('span'); v.className='pvv'; c.appendChild(l); c.appendChild(v); box.appendChild(c);
+      psRefs[k]=v;
+    }
+    return box;
+  }
+  function buildPayoutActions(P){
+    const box=document.createElement('div'); box.className='payout-actions';
+    const mk=(txt,cls,fn,title)=>{ const b=document.createElement('button'); b.className='btn'+(cls?(' '+cls):''); b.textContent=txt; if(title)b.title=title; b.addEventListener('click',fn); return b; };
+    box.appendChild(mk('+ Add member','',()=>{ P.members.push({name:'',mult:1,hits:0,respect:0,chain:0,xanax:0}); payoutDirty=true; renderPayout(); }));
+    box.appendChild(mk('⬇ Import war roster','',()=>importWarRoster(P),'Add your faction’s members from the War List friendly roster'));
+    box.appendChild(mk('💾 Save','btn-primary',()=>savePayout()));
+    box.appendChild(mk(P.active?'Unpublish':'Publish to faction',P.active?'btn-ghost-danger':'',()=>togglePayoutActive()));
+    box.appendChild(mk('Clear','btn-ghost-danger',()=>clearPayout()));
+    const msg=document.createElement('span'); msg.className='payout-saved'; msg.id='payout-msg'; box.appendChild(msg);
+    return box;
+  }
+  function refreshPayoutComputed(){
+    const P=curPayout(), R=computePayout(P.params, P.members);
+    R.rows.forEach((row,idx)=>{ const ref=pcRefs[idx]; if(!ref) return;
+      ref.respAdj.textContent=Math.round(row.respAdj).toLocaleString('en-US');
+      ref.hitPay.textContent=money(row.hitPay);
+      ref.respPay.textContent=money(row.respPay);
+      ref.xanDed.textContent=row.xanDed?('-'+money(row.xanDed)):money(0);
+      ref.xanDed.classList.toggle('p-neg', row.xanDed>0);
+      ref.salary.textContent=money(row.salary);
+      ref.total.textContent=money(row.total);
+    });
+    if(psRefs.net){ psRefs.net.textContent=money(R.net); psRefs.memberShare.textContent=money(R.memberShare); psRefs.factionShare.textContent=money(R.factionShare); psRefs.salaries.textContent=money(R.salaries); psRefs.hitRate.textContent=rate2(R.hitRate); psRefs.respRate.textContent=rate2(R.respRate); psRefs.grandTotal.textContent=money(R.grandTotal); }
+  }
+  function setPayoutMsg(s){ const el=$('#payout-msg'); if(el) el.textContent=s||''; }
+  function importWarRoster(P){
+    const W=war[activePayout];
+    const friendly=(W&&Array.isArray(W.list))?W.list.filter(w=>w.side==='friendly'):[];
+    if(!friendly.length){ setPayoutMsg('No friendly war roster loaded — pull “Add my faction” in the War List first.'); return; }
+    const have=new Set(P.members.map(m=>String(m.name||'').replace(/\s*\[\d+\]\s*$/,'').trim().toLowerCase()));
+    let added=0;
+    friendly.forEach(w=>{ const nm=w.name.replace(/\s*\[\d+\]\s*$/,'').trim(); if(nm && !have.has(nm.toLowerCase())){ P.members.push({name:nm,mult:1,hits:0,respect:0,chain:0,xanax:0}); have.add(nm.toLowerCase()); added++; } });
+    payoutDirty=true; renderPayout(); setPayoutMsg('Added '+added+' member'+(added===1?'':'s')+' from the war roster.');
+  }
+  async function savePayout(){
+    const fid=activePayout, P=payout[fid]; if(!P||!isPayMaster(fid)) return false;
+    setPayoutMsg('Saving…'); setSync(true);
+    let data;
+    try{ data=await sheetCall('payoutSave',{pay:fid, params:P.params, members:P.members}); }
+    catch(err){ setSync(false); setPayoutMsg(''); handleSheetError(err,'Payout save failed.'); return false; }
+    setSync(false); noteRole(data);
+    if(!data.ok){ setPayoutMsg(''); toast(warErrMsg(data.error,data.detail),'err'); return false; }
+    applyPayoutData(fid,data); payoutDirty=false; setPayoutMsg('Saved · '+((payout[fid]||{}).updatedAt||'')); toast('Payout saved.','ok'); return true;
+  }
+  async function togglePayoutActive(){
+    const fid=activePayout, P=payout[fid]; if(!P||!isPayMaster(fid)) return;
+    const want=!P.active;
+    if(want && payoutDirty){ if(!(await savePayout())) return; }   // publish the current edits
+    setSync(true);
+    let data;
+    try{ data=await sheetCall('payoutSetActive',{pay:fid, active:want}); }
+    catch(err){ setSync(false); handleSheetError(err); return; }
+    setSync(false); noteRole(data);
+    if(!data.ok){ toast(warErrMsg(data.error),'err'); return; }
+    applyPayoutData(fid,data); toast(want?'Payout published — your faction can now see it.':'Payout unpublished.', want?'ok':'warn');
+  }
+  async function clearPayout(){
+    const fid=activePayout, P=payout[fid]; if(!P||!isPayMaster(fid)) return;
+    if(!confirm('Clear the '+factionName(fid)+' payout entirely (members + numbers)?')) return;
+    setSync(true);
+    let data;
+    try{ data=await sheetCall('payoutClear',{pay:fid}); }
+    catch(err){ setSync(false); handleSheetError(err); return; }
+    setSync(false); noteRole(data);
+    applyPayoutData(fid,data); payoutDirty=false; toast('Payout cleared.','ok');
+  }
+
   /* ===================== Live config + Admin (owner only) ===================== */
   // Pull the current whitelist (public GET) so the gate + UI reflect live changes,
   // including factions added after this page loaded. Falls back to cached/default.
@@ -2222,6 +2524,7 @@
     // Tabs
     $('#tab-hitlist').addEventListener('click', () => switchView('hitlist'));
     $('#tab-war').addEventListener('click', () => switchView('war'));
+    $('#tab-payout').addEventListener('click', () => switchView('payout'));
     $('#tab-calc').addEventListener('click', () => switchView('calc'));
     $('#tab-settings').addEventListener('click', () => switchView('settings'));
     $('#settings-key-form').addEventListener('submit', e => { e.preventDefault(); updateKey($('#settings-key').value); });
