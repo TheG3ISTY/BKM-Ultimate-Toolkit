@@ -134,6 +134,25 @@
   .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:#1a1020}
   .war-pill{font-family:var(--mono);font-weight:700}
 
+  /* ===== Nav dropdown (collapsed top tabs) ===== */
+  .navdrop{position:relative;display:inline-block}
+  .navdrop-trigger{display:inline-flex;align-items:center;gap:.5rem;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:#1a1020;min-width:170px;justify-content:space-between}
+  .navdrop-trigger:hover{filter:brightness(1.06);background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#1a1020}
+  .navdrop-trigger .caret{font-size:.7em;transition:transform .18s}
+  .navdrop.open .navdrop-trigger .caret{transform:rotate(180deg)}
+  .navdrop-menu{
+    position:absolute;top:calc(100% + .4rem);left:0;z-index:40;min-width:210px;
+    background:var(--surface);border:1px solid var(--border-2);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:.35rem;display:flex;flex-direction:column;gap:.15rem;
+  }
+  .navdrop-item{
+    appearance:none;background:transparent;border:0;color:var(--muted);text-align:left;
+    padding:.55rem .7rem;border-radius:var(--radius-sm);font-size:.9rem;font-weight:700;cursor:pointer;
+    white-space:nowrap;transition:background .12s,color .12s;
+  }
+  .navdrop-item:hover{background:var(--surface-2);color:var(--text)}
+  .navdrop-item.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#1a1020}
+
   /* ===== Value Calculator (integrated; all selectors scoped under #view-calc) ===== */
   #view-calc{
     --bg:#07070c;--surface:#0e0e16;--s2:#15151f;--s3:#1c1c2a;--brd:#252538;
@@ -526,11 +545,16 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab active" id="tab-hitlist" type="button">🎯 Hit List</button>
-    <button class="tab" id="tab-war" type="button">⚔️ War List</button>
-    <button class="tab" id="tab-payout" type="button" hidden>💵 Payout</button>
-    <button class="tab" id="tab-calc" type="button">💰 Value Calc</button>
-    <button class="tab" id="tab-settings" type="button">⚙️ Settings</button>
+    <div class="navdrop" id="navdrop">
+      <button class="tab navdrop-trigger" id="nav-trigger" type="button" aria-haspopup="true" aria-expanded="false">🎯 Hit List <span class="caret">▾</span></button>
+      <div class="navdrop-menu" id="nav-menu" role="menu" hidden>
+        <button class="navdrop-item active" id="tab-hitlist" type="button" role="menuitem">🎯 Hit List</button>
+        <button class="navdrop-item" id="tab-war" type="button" role="menuitem">⚔️ War List</button>
+        <button class="navdrop-item" id="tab-payout" type="button" role="menuitem" hidden>💵 Payout</button>
+        <button class="navdrop-item" id="tab-calc" type="button" role="menuitem">💰 Value Calc</button>
+        <button class="navdrop-item" id="tab-settings" type="button" role="menuitem">⚙️ Settings</button>
+      </div>
+    </div>
   </nav>
 
   <div id="view-hitlist">
@@ -1718,12 +1742,23 @@
     $('#tab-payout').classList.toggle('active', view === 'payout');
     $('#tab-calc').classList.toggle('active', view === 'calc');
     $('#tab-settings').classList.toggle('active', view === 'settings');
+    updateNavTrigger();
     if(view === 'war') renderWar();
     else if(view === 'payout') loadPayout();
     else if(view === 'calc') loadCalc();
     else if(view === 'settings') openSettings();
     else render();
   }
+  // Sync the dropdown trigger to the active menu item's label.
+  function updateNavTrigger(){
+    const active = document.querySelector('#nav-menu .navdrop-item.active');
+    const t = $('#nav-trigger'); if(!t || !active) return;
+    t.textContent = active.textContent.trim() + ' ';
+    const c = document.createElement('span'); c.className = 'caret'; c.textContent = '▾'; t.appendChild(c);
+  }
+  function closeNav(){ const d=$('#navdrop'), m=$('#nav-menu'), t=$('#nav-trigger'); if(d)d.classList.remove('open'); if(m)m.hidden=true; if(t)t.setAttribute('aria-expanded','false'); }
+  function toggleNav(){ const m=$('#nav-menu'); if(!m) return; m.hidden ? openNav() : closeNav(); }
+  function openNav(){ const d=$('#navdrop'), m=$('#nav-menu'), t=$('#nav-trigger'); if(d)d.classList.add('open'); if(m)m.hidden=false; if(t)t.setAttribute('aria-expanded','true'); }
   // Prep the Settings tab: prefill the current key, show FFScouter only for warmasters.
   function openSettings(){
     const k = $('#settings-key'); if(k) k.value = statsKey();
@@ -2521,7 +2556,11 @@
     // Hit-list faction filter (checkboxes generated from the whitelist)
     renderFactionFilter();
 
-    // Tabs
+    // Tabs (collapsed into a dropdown menu)
+    $('#nav-trigger').addEventListener('click', e => { e.stopPropagation(); toggleNav(); });
+    document.querySelectorAll('#nav-menu .navdrop-item').forEach(b => b.addEventListener('click', closeNav));
+    document.addEventListener('click', e => { const d = $('#navdrop'); if(d && !d.contains(e.target)) closeNav(); });
+    document.addEventListener('keydown', e => { if(e.key === 'Escape') closeNav(); });
     $('#tab-hitlist').addEventListener('click', () => switchView('hitlist'));
     $('#tab-war').addEventListener('click', () => switchView('war'));
     $('#tab-payout').addEventListener('click', () => switchView('payout'));
