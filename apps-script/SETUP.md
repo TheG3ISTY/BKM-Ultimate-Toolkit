@@ -77,6 +77,18 @@ view. Non-masters only see a roster once its master has **activated** it.
 - There is **one war roster per whitelisted faction**, keyed by faction id. The
   two original factions keep their legacy sheet names (`War`, `War_SH`); any newly
   whitelisted faction gets a `War_<id>` tab auto-created on first use.
+
+## War payout calculator (💵 Payout tab)
+
+A per-faction ranked-war payout calculator (net pool → member/faction split →
+salaries off the top → hit/respect split → per-member payout, with xanax
+deductions). **Warmasters** of a faction edit and **publish** their faction's
+payout; once published, that faction's **members** can view their own cut
+(transparency). All parameters (the %-splits, salary, xanax price, rates) are
+free-form editable by warmasters. Stored in the same Google Sheet: members in a
+`Payout_<factionId>` tab (auto-created), and the tunable params + publish flag in
+a Script Property (`payoutMeta_<factionId>`). Actions: `payoutStatus` (read),
+`payoutSave` / `payoutSetActive` / `payoutClear` (warmaster-only).
 - Each roster is written to its own tab (auto-created): **`War`** (Boykisser
   Meetup) and **`War_SH`** (Static Hearts). Activation state lives in Script
   Properties, not a cell.

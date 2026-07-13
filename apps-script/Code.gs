@@ -133,6 +133,8 @@ function doPost(e) {
   var master = isMaster(member);            // hit-list curation (any master)
   var wkey = warKeyOf(body);
   var warMaster = isWarMaster(member, wkey); // war control (this faction only)
+  var pkey = payoutKeyOf(body);
+  var payMaster = isWarMaster(member, pkey); // payout edit (this faction's warmasters)
 
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ ok: false, error: 'busy' }); }
@@ -159,6 +161,11 @@ function doPost(e) {
       case 'warActivate':     out = warMaster ? warSetActive(true, wkey)    : forbidden(); break;
       case 'warDeactivate':   out = warMaster ? warSetActive(false, wkey)   : forbidden(); break;
       case 'warClear':        out = warMaster ? warClear(wkey)              : forbidden(); break;
+      // ---- War payout (per faction; body.pay selects the faction id) ----
+      case 'payoutStatus':    out = payoutStatus(member, pkey); break;
+      case 'payoutSave':      out = payMaster ? payoutSave(body, pkey)             : forbidden(); break;
+      case 'payoutSetActive': out = payMaster ? payoutSetActive(!!body.active, pkey) : forbidden(); break;
+      case 'payoutClear':     out = payMaster ? payoutClear(pkey)                  : forbidden(); break;
       // ---- Admin (OWNER-ONLY): live whitelist + masters management ----
       case 'adminConfig':        out = owner ? adminConfig()             : forbidden(); break;
       case 'adminAddFaction':    out = owner ? adminAddFaction(body)     : forbidden(); break;
@@ -672,6 +679,108 @@ function warClear(wkey) {
   saveWarMeta(wkey, { active: false, factionId: 0, factionName: '', generatedAt: '' });
   return { ok: true, war: wkey, active: false, roster: [], factionId: 0, factionName: '', generatedAt: '' };
 }
+/* ---------- War payout calculator (one per faction) ---------- */
+// Members live in a per-faction sheet; the tunable params + publish flag live in
+// a Script Property. Warmasters of a faction edit its payout; members of that
+// faction can READ it once it's published (active).
+var PAYOUT_HEADERS = ['Name', 'Mult', 'Hits', 'Respect', 'ChainBonus', 'Xanax'];
+function payoutCfg(fid) { fid = Number(fid); return { sheet: 'Payout_' + fid, meta: 'payoutMeta_' + fid, factionId: fid }; }
+function payoutKeyOf(body) {
+  var fid = Number(body && body.pay) || 0;
+  var wl = getWhitelist();
+  if (wl[String(fid)]) return fid;
+  var ids = Object.keys(wl);
+  return ids.length ? Number(ids[0]) : DEFAULT_FACTION;
+}
+function defaultPayoutParams() { return { warPayout: 0, expenses: 0, memberPct: 80, factionPct: 20, hitPct: 50, respectPct: 50, salaryEach: 0, xanaxPrice: 0 }; }
+function sanitizePayoutParams(p) {
+  p = p || {}; var d = defaultPayoutParams(), o = {};
+  for (var k in d) { if (!d.hasOwnProperty(k)) continue; var v = Number(p[k]); o[k] = isFinite(v) ? v : d[k]; }
+  return o;
+}
+function payoutMeta(fid) {
+  var raw = PropertiesService.getScriptProperties().getProperty(payoutCfg(fid).meta);
+  var m = { active: false, params: defaultPayoutParams(), updatedAt: '' };
+  if (raw) { try { var p = JSON.parse(raw); if (p) { m.active = !!p.active; m.updatedAt = String(p.updatedAt || ''); m.params = sanitizePayoutParams(p.params); } } catch (e) {} }
+  return m;
+}
+function savePayoutMeta(fid, m) {
+  PropertiesService.getScriptProperties().setProperty(payoutCfg(fid).meta,
+    JSON.stringify({ active: !!m.active, params: sanitizePayoutParams(m.params), updatedAt: String(m.updatedAt || '') }));
+}
+function payoutSheet(fid) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var name = payoutCfg(fid).sheet;
+  var sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  var fresh = sh.getLastRow() === 0;
+  ensureHeaders(sh, PAYOUT_HEADERS);
+  if (fresh) { sh.getRange('A:A').setNumberFormat('@'); }   // Name -> plain text
+  return sh;
+}
+function payoutReadAll(fid) {
+  var sh = payoutSheet(fid);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var rows = sh.getRange(2, 1, last - 1, PAYOUT_HEADERS.length).getValues();
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var name = String(r[0] || '').trim();
+    if (!name && !r[2] && !r[3] && !r[5]) continue;   // skip fully-blank rows
+    out.push({
+      name: name,
+      mult: (r[1] === '' || r[1] === null) ? 1 : Number(r[1]),
+      hits: Number(r[2]) || 0,
+      respect: Number(r[3]) || 0,
+      chain: Number(r[4]) || 0,
+      xanax: Number(r[5]) || 0
+    });
+  }
+  return out;
+}
+function payoutSaveMembers(fid, members) {
+  var sh = payoutSheet(fid);
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, PAYOUT_HEADERS.length).clearContent();
+  var rows = (members || []).map(function (m) {
+    return [String(m.name || ''), (m.mult == null ? 1 : Number(m.mult) || 0), Number(m.hits) || 0, Number(m.respect) || 0, Number(m.chain) || 0, Number(m.xanax) || 0];
+  });
+  if (rows.length) sh.getRange(2, 1, rows.length, PAYOUT_HEADERS.length).setValues(rows);
+}
+function payoutEnvelope(fid) {
+  var m = payoutMeta(fid);
+  return { ok: true, pay: fid, active: m.active, params: m.params, members: payoutReadAll(fid), updatedAt: m.updatedAt };
+}
+// Warmasters of the faction see it always; members of that faction see it once
+// published (active). Other factions can't read it.
+function payoutStatus(member, fid) {
+  var master = isWarMaster(member, fid);
+  var m = payoutMeta(fid);
+  var same = Number(member.factionId) === Number(fid);
+  var out = { ok: true, pay: fid, active: m.active, master: master };
+  if (master || (m.active && same)) {
+    out.params = m.params; out.members = payoutReadAll(fid); out.updatedAt = m.updatedAt; out.canRead = true;
+  } else { out.canRead = false; }
+  return out;
+}
+function payoutSave(body, fid) {
+  var m = payoutMeta(fid);
+  if (body.params) m.params = sanitizePayoutParams(body.params);
+  m.updatedAt = nowStr();
+  savePayoutMeta(fid, m);
+  if (body.members != null) payoutSaveMembers(fid, body.members);
+  return payoutEnvelope(fid);
+}
+function payoutSetActive(flag, fid) { var m = payoutMeta(fid); m.active = !!flag; savePayoutMeta(fid, m); return payoutEnvelope(fid); }
+function payoutClear(fid) {
+  var sh = payoutSheet(fid);
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, PAYOUT_HEADERS.length).clearContent();
+  savePayoutMeta(fid, { active: false, params: defaultPayoutParams(), updatedAt: '' });
+  return payoutEnvelope(fid);
+}
+
 function nowStr() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
 }
