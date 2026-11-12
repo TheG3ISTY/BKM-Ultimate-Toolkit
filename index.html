@@ -807,6 +807,14 @@
         <button class="btn btn-primary" type="submit">+ Add</button>
       </form>
 
+      <label class="field-label" style="margin-top:1.3rem">Individually whitelisted players (member access without a faction)</label>
+      <div id="admin-players" class="admin-list"></div>
+      <form id="admin-player-form" class="add-form" autocomplete="off" style="margin-top:.6rem">
+        <input id="admin-player-input" class="input" placeholder="Player ID or Name [ID]" spellcheck="false">
+        <button class="btn btn-primary" type="submit">+ Whitelist</button>
+      </form>
+      <p class="help">Lets a specific player in (add/edit/refresh stats) even if their faction isn't whitelisted. Same tier as a faction member, not a master.</p>
+
       <label class="field-label" style="margin-top:1.3rem">War masters — assign a player to a faction</label>
       <div id="admin-masters" class="admin-list"></div>
       <form id="admin-master-form" class="add-form" autocomplete="off" style="margin-top:.6rem;flex-wrap:wrap">
@@ -2636,13 +2644,14 @@
   }
   let adminMasters = {};   // { playerId: [factionIds] }
   let adminMugUsers = [];  // [playerId] granted Buy-Mug access
+  let adminAllowedPlayers = [];  // [playerId] individually whitelisted (member access, no faction)
   function setAdminMsg(s){ const el = $('#admin-msg'); if(el) el.textContent = s || ''; }
   function openAdmin(){ if(!isOwner) return; $('#admin').hidden = false; loadAdmin(); }
   function closeAdmin(){ $('#admin').hidden = true; }
   async function loadAdmin(){
     setAdminMsg('Loading…');
     const data = await adminCall('adminConfig');
-    if(data.ok){ adminMasters = (data.masters && typeof data.masters === 'object') ? data.masters : {}; adminMugUsers = Array.isArray(data.mugUsers) ? data.mugUsers : []; renderAdmin(); setAdminMsg(''); }
+    if(data.ok){ adminMasters = (data.masters && typeof data.masters === 'object') ? data.masters : {}; adminMugUsers = Array.isArray(data.mugUsers) ? data.mugUsers : []; adminAllowedPlayers = Array.isArray(data.allowedPlayers) ? data.allowedPlayers : []; renderAdmin(); setAdminMsg(''); }
     else setAdminMsg('Could not load config (owner only).');
   }
   function factionChip(fid, onRemove){
@@ -2667,6 +2676,17 @@
         const rm = document.createElement('button'); rm.className = 'icon-btn danger'; rm.textContent = '✕'; rm.title = 'Remove faction';
         rm.addEventListener('click', () => adminRemoveFaction(fid));
         row.appendChild(col); row.appendChild(nm); row.appendChild(rm); fb.appendChild(row);
+      }
+    }
+    // Individually whitelisted players (member access, no faction needed)
+    const pb = $('#admin-players'); if(pb){ pb.innerHTML = '';
+      for(const pid of adminAllowedPlayers){
+        if(Number(pid) === OWNER_ID) continue;
+        const row = document.createElement('div'); row.className = 'admin-row';
+        const nm = document.createElement('span'); nm.className = 'admin-name'; nm.textContent = '[' + pid + ']';
+        const rm = document.createElement('button'); rm.className = 'icon-btn danger'; rm.textContent = '✕'; rm.title = 'Remove from whitelist';
+        rm.addEventListener('click', () => adminRemovePlayer(Number(pid)));
+        row.appendChild(nm); row.appendChild(rm); pb.appendChild(row);
       }
     }
     // Masters: owner (all factions) + each assigned player with per-faction chips
@@ -2752,6 +2772,19 @@
     const data = await adminCall('adminRemoveMugUser', { playerId: pid });
     if(data.ok){ adminMugUsers = Array.isArray(data.mugUsers) ? data.mugUsers : adminMugUsers; renderAdmin(); toast('Access revoked.', 'ok'); }
   }
+  async function adminAddPlayer(){
+    const raw = ($('#admin-player-input').value || '').trim();
+    const mm = /\[(\d+)\]/.exec(raw); const pid = mm ? parseInt(mm[1],10) : parseInt(raw,10);
+    if(!pid){ setAdminMsg('Enter a player ID (or Name [ID]).'); return; }
+    const data = await adminCall('adminAddPlayer', { playerId: pid });
+    if(data.ok){ adminAllowedPlayers = Array.isArray(data.allowedPlayers) ? data.allowedPlayers : adminAllowedPlayers; renderAdmin(); $('#admin-player-input').value=''; setAdminMsg(''); toast('[' + pid + '] whitelisted.', 'ok'); }
+    else setAdminMsg('Could not whitelist that player.');
+  }
+  async function adminRemovePlayer(pid){
+    if(!confirm('Remove [' + pid + '] from the individual whitelist? They lose access unless they are in a whitelisted faction.')) return;
+    const data = await adminCall('adminRemovePlayer', { playerId: pid });
+    if(data.ok){ adminAllowedPlayers = Array.isArray(data.allowedPlayers) ? data.allowedPlayers : adminAllowedPlayers; renderAdmin(); toast('Removed.', 'ok'); }
+  }
 
   /* ===================== Init ===================== */
   function init(){
@@ -2828,6 +2861,7 @@
     $('#admin-close').addEventListener('click', closeAdmin);
     $('#admin').addEventListener('click', e => { if(e.target.id === 'admin') closeAdmin(); });
     $('#admin-faction-form').addEventListener('submit', e => { e.preventDefault(); adminAddFaction(); });
+    $('#admin-player-form').addEventListener('submit', e => { e.preventDefault(); adminAddPlayer(); });
     $('#admin-master-form').addEventListener('submit', e => { e.preventDefault(); adminAddMaster(); });
     $('#admin-mug-form').addEventListener('submit', e => { e.preventDefault(); adminAddMugUser(); });
 

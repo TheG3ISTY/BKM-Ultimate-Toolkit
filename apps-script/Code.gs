@@ -42,6 +42,7 @@ var SEED_MASTERS = { '3558000': [45990] };   // Madilynn-SkyBby masters Static H
 var FACTION_COLORS = ['#60a5fa', '#f472b6', '#c084fc', '#fbbf24', '#34d399', '#22d3ee', '#fb923c', '#a3e635'];
 var CFG_WHITELIST = 'cfg_whitelist';
 var CFG_MASTERS = 'cfg_masters';
+var CFG_PLAYERS = 'cfg_players';   // individually-whitelisted player ids (member access, no faction needed)
 
 // Legacy targets predate the Faction column; treat them as Boykisser Meetup's.
 var DEFAULT_FACTION = 56875;
@@ -80,6 +81,16 @@ function getMasterMap() {
   return sanitizeMap(SEED_MASTERS);
 }
 function saveMasterMap(m) { PropertiesService.getScriptProperties().setProperty(CFG_MASTERS, JSON.stringify(sanitizeMap(m))); }
+// Individually-whitelisted players: member-level access (list, add, edit, stats)
+// for a specific player id regardless of their current faction. Owner-managed,
+// live, same as the faction whitelist. Separate from masters/mug access, which
+// still require this gate to pass first.
+function getAllowedPlayers() {
+  var raw = PropertiesService.getScriptProperties().getProperty(CFG_PLAYERS);
+  if (raw) { try { var a = JSON.parse(raw); if (a && a.length !== undefined) return arrNums(a); } catch (e) {} }
+  return [];
+}
+function saveAllowedPlayers(a) { PropertiesService.getScriptProperties().setProperty(CFG_PLAYERS, JSON.stringify(arrNums(a))); }
 function sanitizeMap(m) {
   var out = {};
   for (var k in m) { if (!m.hasOwnProperty(k)) continue; var pid = Number(k); if (!pid) continue;
@@ -182,6 +193,8 @@ function doPost(e) {
       case 'adminRemoveMaster':  out = owner ? adminRemoveMaster(body)   : forbidden(); break;
       case 'adminAddMugUser':    out = owner ? adminAddMugUser(body)     : forbidden(); break;
       case 'adminRemoveMugUser': out = owner ? adminRemoveMugUser(body)  : forbidden(); break;
+      case 'adminAddPlayer':     out = owner ? adminAddPlayer(body)      : forbidden(); break;
+      case 'adminRemovePlayer':  out = owner ? adminRemovePlayer(body)   : forbidden(); break;
       default:         out = { ok: false, error: 'unknown_action' };
     }
   } finally {
@@ -228,14 +241,16 @@ function memberInfo(key) {
       var fac = data.faction || {};
       var fid = Number(fac.faction_id || 0);
       var wl = getWhitelist();
+      var allowed = getAllowedPlayers().indexOf(pid) !== -1;
       // Owner always passes, faction or no faction (can't lock themselves out);
-      // everyone else must be in a currently-whitelisted faction.
-      if (pid === OWNER_ID || wl[String(fid)]) {
+      // everyone else must be in a currently-whitelisted faction, OR individually
+      // whitelisted by the owner regardless of faction.
+      if (pid === OWNER_ID || wl[String(fid)] || allowed) {
         info.ok = true;
         info.position = String(fac.position || '');
         info.playerId = pid;
         info.factionId = fid;
-        info.factionName = (wl[String(fid)] && wl[String(fid)].name) || (fid ? ('Faction ' + fid) : 'None');
+        info.factionName = (wl[String(fid)] && wl[String(fid)].name) || (fid ? ('Faction ' + fid) : (allowed ? 'Whitelisted player' : 'None'));
       }
     }
   } catch (err) {}
@@ -276,7 +291,7 @@ function cacheKey(key) {
 }
 
 /* ---------- Admin actions (owner-only; enforced in doPost) ---------- */
-function adminConfig() { return { ok: true, whitelist: getWhitelist(), masters: getMasterMap(), mugUsers: getMugUsers() }; }
+function adminConfig() { return { ok: true, whitelist: getWhitelist(), masters: getMasterMap(), mugUsers: getMugUsers(), allowedPlayers: getAllowedPlayers() }; }
 function adminAddFaction(body) {
   var fid = parseInt(body.factionId, 10);
   if (!fid) return { ok: false, error: 'bad_faction' };
@@ -869,6 +884,20 @@ function adminRemoveMugUser(body) {
   var a = getMugUsers().filter(function (x) { return x !== pid; });
   saveMugUsers(a);
   return { ok: true, mugUsers: a };
+}
+// Individually-whitelisted players (member access without a whitelisted faction).
+function adminAddPlayer(body) {
+  var pid = parseInt(body.playerId, 10);
+  if (!pid) return { ok: false, error: 'bad_player' };
+  var a = getAllowedPlayers();
+  if (a.indexOf(pid) === -1) { a.push(pid); saveAllowedPlayers(a); }
+  return { ok: true, allowedPlayers: a };
+}
+function adminRemovePlayer(body) {
+  var pid = parseInt(body.playerId, 10) || 0;
+  var a = getAllowedPlayers().filter(function (x) { return x !== pid; });
+  saveAllowedPlayers(a);
+  return { ok: true, allowedPlayers: a };
 }
 
 /* ---------- Travel foreign stock (YATA proxy) ---------- */
