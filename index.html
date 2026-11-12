@@ -866,7 +866,7 @@
   const DEFAULT_STATS_URL = 'https://ffscouter.com/api/v1/get-stats?key={KEY}&targets={IDS}';
   // Shared Google Sheet backend (Apps Script web app). Every call is verified
   // server-side against the current whitelist.
-  const SHEET_API = 'https://script.google.com/macros/s/AKfycbzI2a30F1rzkKZsVzIUnh0UzuE5v0riAhygqdkINPuYNk-FmgJuXFUK5U62dvgOcxu9Gg/exec';
+  const SHEET_API = 'https://script.google.com/macros/s/AKfycbwIJKBp5YXkoTLJM2DpY9-T9LKs6OH7GYOl0VHzvKgvZRAZ0mxlOS72GcfGvQN9IA5PBA/exec';
   const CHUNK_SIZE = 200;          // FFScouter allows up to 205 IDs / request
   const CHUNK_SPACING_MS = 3500;   // spacing when chunking -> well under 20/min
   const RATE_MAX = 20;             // hard cap: 20 requests / 60s / IP (FFScouter)
