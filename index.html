@@ -665,6 +665,7 @@
       <button class="btn btn-primary" type="submit">+ Add</button>
     </form>
     <div class="toolbar">
+      <button class="btn" id="revive-import-btn" title="Add everyone currently on the Hit List who isn't already here">⬇ Pull from Hit List</button>
       <button class="btn" id="revive-reload-btn" title="Reload the shared list to see others' changes">↻ Reload</button>
     </div>
     <p id="revive-add-error" class="add-error" role="alert"></p>
@@ -1831,6 +1832,21 @@
     noteRole(data);
     if(data && data.ok){ revives = Array.isArray(data.revives) ? data.revives : revives; renderRevive(); }
   }
+  // One-way pull: everyone on the Hit List who isn't already banned gets added.
+  // Never removes anything, so the ban list can still hold non-Hit-List players.
+  async function importReviveFromHitlist(){
+    if(!confirm("Add everyone on the Hit List to the Revive Ban list? Existing entries here that aren't on the Hit List are left alone.")) return;
+    const data = await sheetCall('reviveImportHitlist');
+    noteRole(data);
+    if(data && data.ok){
+      revives = Array.isArray(data.revives) ? data.revives : revives;
+      renderRevive();
+      const n = Number(data.imported) || 0;
+      toast(n ? ('Added ' + n + (n === 1 ? ' player' : ' players') + ' from the Hit List.') : 'Already up to date.', 'ok');
+    } else {
+      toast('Could not import from the Hit List.', 'err');
+    }
+  }
 
   /* ===================== War list (master-controlled second view) ===================== */
   function normalizeWar(o){
@@ -2902,6 +2918,7 @@
     $('#update-btn').addEventListener('click', updateStats);
     $('#reload-btn').addEventListener('click', syncList);
     $('#revive-add-form').addEventListener('submit', e => { e.preventDefault(); addRevive(); });
+    $('#revive-import-btn').addEventListener('click', importReviveFromHitlist);
     $('#revive-reload-btn').addEventListener('click', syncRevive);
     $('#logout-btn').addEventListener('click', logout);
     $('#export-btn').addEventListener('click', exportJson);

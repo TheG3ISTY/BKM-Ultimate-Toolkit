@@ -167,6 +167,7 @@ function doPost(e) {
       case 'reviveList':   out = { ok: true, revives: reviveReadAll() }; break;
       case 'reviveAdd':    out = reviveAdd(body); break;
       case 'reviveDelete': out = master ? reviveDelete(body) : forbiddenRevive(); break;
+      case 'reviveImportHitlist': out = reviveImportHitlist(); break;
       // ---- War list (per-roster; body.war selects the faction id) ----
       case 'warStatus':       out = warStatus(member, wkey); break;
       case 'warGenerate':     out = warMaster ? warGenerate(body, wkey)     : forbidden(); break;
@@ -567,6 +568,22 @@ function reviveDelete(body) {
   return { ok: true, revives: reviveReadAll() };
 }
 function forbiddenRevive() { return { ok: false, error: 'forbidden', revives: reviveReadAll() }; }
+// One-way pull: every hit-list target who isn't already on the revive ban list
+// gets added (carrying over its Why note). Never removes anything, so the ban
+// list can still hold players who aren't (or no longer are) on the hit list.
+function reviveImportHitlist() {
+  var hits = readAll();
+  var sh = reviveSheet();
+  var added = 0;
+  for (var i = 0; i < hits.length; i++) {
+    var t = hits[i];
+    var id = idFromName(t.name);
+    if (!id || findRowById(sh, id) !== -1) continue;
+    sh.appendRow([t.name, t.why || '', nowStr()]);
+    added++;
+  }
+  return { ok: true, revives: reviveReadAll(), imported: added };
+}
 
 /* ---------- War list (per-roster, keyed by faction id) ---------- */
 function warSheet(wkey) {
