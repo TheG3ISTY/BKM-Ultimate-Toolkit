@@ -208,9 +208,9 @@ function memberInfo(key) {
   if (hit) {
     try {
       var p = JSON.parse(hit);
-      // Honor cached negatives, and cached positives that carry both a playerId
-      // and a factionId. Stale pre-upgrade positives re-fetch.
-      if (p && typeof p.ok === 'boolean' && (p.ok === false || (p.playerId && p.factionId))) return p;
+      // Honor cached negatives, and any cached positive (which always carries a
+      // playerId). Stale pre-upgrade positives re-fetch.
+      if (p && typeof p.ok === 'boolean' && (p.ok === false || p.playerId)) return p;
     } catch (e) {}
   }
   var info = { ok: false, position: '', playerId: 0, factionId: 0, factionName: '' };
@@ -220,18 +220,22 @@ function memberInfo(key) {
       { muteHttpExceptions: true }
     );
     var data = JSON.parse(resp.getContentText());
-    if (data && !data.error && data.faction) {
-      var fid = Number(data.faction.faction_id);
+    if (data && !data.error) {
+      // data.player_id is top-level and always present on a valid key, regardless
+      // of whether the player is currently in any faction. Read it unconditionally
+      // so the owner bypass below can't be skipped by a missing/empty faction object.
       var pid = Number(data.player_id || 0);
+      var fac = data.faction || {};
+      var fid = Number(fac.faction_id || 0);
       var wl = getWhitelist();
-      // Owner always passes (can't lock themselves out); everyone else must be
-      // in a currently-whitelisted faction.
-      if (wl[String(fid)] || pid === OWNER_ID) {
+      // Owner always passes, faction or no faction (can't lock themselves out);
+      // everyone else must be in a currently-whitelisted faction.
+      if (pid === OWNER_ID || wl[String(fid)]) {
         info.ok = true;
-        info.position = String(data.faction.position || '');
+        info.position = String(fac.position || '');
         info.playerId = pid;
         info.factionId = fid;
-        info.factionName = (wl[String(fid)] && wl[String(fid)].name) || ('Faction ' + fid);
+        info.factionName = (wl[String(fid)] && wl[String(fid)].name) || (fid ? ('Faction ' + fid) : 'None');
       }
     }
   } catch (err) {}
