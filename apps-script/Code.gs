@@ -163,6 +163,10 @@ function doPost(e) {
       case 'setShared': out = master ? setShared(body)  : forbiddenTargets(); break;
       // Reassigning a target's faction is OWNER-only (a sensitive cross-faction move).
       case 'setFaction': out = owner ? setFaction(body) : forbiddenTargets(); break;
+      // ---- Revive ban list (any verified member reads/adds; delete is master-only) ----
+      case 'reviveList':   out = { ok: true, revives: reviveReadAll() }; break;
+      case 'reviveAdd':    out = reviveAdd(body); break;
+      case 'reviveDelete': out = master ? reviveDelete(body) : forbiddenRevive(); break;
       // ---- War list (per-roster; body.war selects the faction id) ----
       case 'warStatus':       out = warStatus(member, wkey); break;
       case 'warGenerate':     out = warMaster ? warGenerate(body, wkey)     : forbidden(); break;
@@ -517,6 +521,52 @@ function setFaction(body) {
   sh.getRange(row, HEADERS.indexOf('Faction') + 1).setValue(fac);
   return { ok: true, targets: readAll() };
 }
+
+/* ---------- Revive ban list (shared list, no stats, no faction tagging) ---------- */
+var REVIVE_SHEET_NAME = 'ReviveBan';
+var REVIVE_HEADERS = ['Name', 'Why', 'AddedAt'];
+function reviveSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(REVIVE_SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(REVIVE_SHEET_NAME);
+  var fresh = sh.getLastRow() === 0;
+  ensureHeaders(sh, REVIVE_HEADERS);
+  if (fresh) sh.getRange('A:A').setNumberFormat('@');   // Name -> plain text (keep "[id]")
+  return sh;
+}
+function reviveReadAll() {
+  var sh = reviveSheet();
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var rows = sh.getRange(2, 1, last - 1, REVIVE_HEADERS.length).getValues();
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var name = String(r[0] || '').trim();
+    if (!name) continue;
+    out.push({ name: name, why: String(r[1] || ''), addedAt: String(r[2] || '') });
+  }
+  return out;
+}
+// Any verified member may add; delete is master-only (mirrors the hit list).
+function reviveAdd(body) {
+  var name = String(body.name || '').trim();
+  var id = idFromName(name);
+  if (!id) return { ok: false, error: 'bad_name' };
+  var sh = reviveSheet();
+  if (findRowById(sh, id) !== -1) return { ok: false, error: 'duplicate', revives: reviveReadAll() };
+  sh.appendRow([name, String(body.why || ''), nowStr()]);
+  return { ok: true, revives: reviveReadAll() };
+}
+function reviveDelete(body) {
+  var id = String(body.id || '');
+  var sh = reviveSheet();
+  var row = findRowById(sh, id);
+  if (row === -1) return { ok: false, error: 'not_found', revives: reviveReadAll() };
+  sh.deleteRow(row);
+  return { ok: true, revives: reviveReadAll() };
+}
+function forbiddenRevive() { return { ok: false, error: 'forbidden', revives: reviveReadAll() }; }
 
 /* ---------- War list (per-roster, keyed by faction id) ---------- */
 function warSheet(wkey) {

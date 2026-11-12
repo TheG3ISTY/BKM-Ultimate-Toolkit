@@ -598,6 +598,7 @@
       <button class="tab navdrop-trigger" id="nav-trigger" type="button" aria-haspopup="true" aria-expanded="false">🎯 Hit List <span class="caret">▾</span></button>
       <div class="navdrop-menu" id="nav-menu" role="menu" hidden>
         <button class="navdrop-item active" id="tab-hitlist" type="button" role="menuitem">🎯 Hit List</button>
+        <button class="navdrop-item" id="tab-revive" type="button" role="menuitem">🚫 Revive Ban</button>
         <button class="navdrop-item" id="tab-war" type="button" role="menuitem">⚔️ War List</button>
         <button class="navdrop-item" id="tab-payout" type="button" role="menuitem" hidden>💵 Payout</button>
         <button class="navdrop-item" id="tab-calc" type="button" role="menuitem">💰 Value Calc</button>
@@ -655,6 +656,40 @@
     <span class="foot-note">Client-side gate only — not real access control. See README.</span>
   </footer>
   </div><!-- /#view-hitlist -->
+
+  <div id="view-revive" hidden>
+  <section class="controls">
+    <form id="revive-add-form" class="add-form" autocomplete="off">
+      <input id="revive-add-input" class="input" placeholder="Add player, e.g. Frenemy [3981563]" spellcheck="false">
+      <input id="revive-why-input" class="input" placeholder="Why (optional)" spellcheck="false">
+      <button class="btn btn-primary" type="submit">+ Add</button>
+    </form>
+    <div class="toolbar">
+      <button class="btn" id="revive-reload-btn" title="Reload the shared list to see others' changes">↻ Reload</button>
+    </div>
+    <p id="revive-add-error" class="add-error" role="alert"></p>
+  </section>
+
+  <div class="table-wrap">
+    <table class="targets">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Why</th>
+          <th>Added</th>
+          <th>Profile</th>
+          <th aria-label="Actions"></th>
+        </tr>
+      </thead>
+      <tbody id="revive-tbody"></tbody>
+    </table>
+  </div>
+
+  <footer class="appfoot">
+    <span id="revive-count" class="count"></span>
+    <span class="foot-note">No stats, no faction split. Just: don't revive these people. Delete is master-only.</span>
+  </footer>
+  </div><!-- /#view-revive -->
 
   <div id="view-war" hidden>
     <nav class="tabs subtabs" id="war-subtabs">
@@ -1740,6 +1775,63 @@
     render(); renderWar();
   }
 
+  /* ===================== Revive ban list (simple shared list, no stats) ===================== */
+  let revives = [];
+  async function syncRevive(){
+    setSync(true);
+    try{ const d = await sheetCall('reviveList'); noteRole(d); if(d && d.ok && Array.isArray(d.revives)) revives = d.revives; }
+    catch(err){}
+    finally{ setSync(false); }
+    renderRevive();
+  }
+  function loadRevive(){ renderRevive(); syncRevive(); }
+  function renderRevive(){
+    const tbody = $('#revive-tbody'); if(!tbody) return;
+    tbody.innerHTML = '';
+    for(const r of revives){
+      const id = extractId(r.name);
+      const tr = document.createElement('tr');
+      const nameTd = document.createElement('td'); nameTd.textContent = r.name; tr.appendChild(nameTd);
+      const whyTd = document.createElement('td'); whyTd.textContent = r.why || ''; tr.appendChild(whyTd);
+      const whenTd = document.createElement('td'); whenTd.textContent = r.addedAt || ''; tr.appendChild(whenTd);
+      const profTd = document.createElement('td');
+      if(id){ const a = document.createElement('a'); a.href = 'https://www.torn.com/profiles.php?XID=' + id; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Profile'; profTd.appendChild(a); }
+      tr.appendChild(profTd);
+      const actTd = document.createElement('td');
+      if(isMaster){
+        const rm = document.createElement('button'); rm.className = 'icon-btn danger'; rm.textContent = '✕'; rm.title = 'Remove from revive ban list';
+        rm.addEventListener('click', () => deleteRevive(id));
+        actTd.appendChild(rm);
+      }
+      tr.appendChild(actTd);
+      tbody.appendChild(tr);
+    }
+    const cnt = $('#revive-count'); if(cnt) cnt.textContent = revives.length + (revives.length === 1 ? ' player' : ' players');
+  }
+  async function addRevive(){
+    const raw = ($('#revive-add-input').value || '').trim();
+    const err = $('#revive-add-error');
+    const id = extractId(raw);
+    if(!id){ if(err) err.textContent = 'Enter Name [ID].'; return; }
+    if(err) err.textContent = '';
+    const why = ($('#revive-why-input').value || '').trim();
+    const data = await sheetCall('reviveAdd', { name: raw, why });
+    noteRole(data);
+    if(data && data.ok){
+      revives = Array.isArray(data.revives) ? data.revives : revives;
+      renderRevive();
+      $('#revive-add-input').value = ''; $('#revive-why-input').value = '';
+    } else if(err){
+      err.textContent = (data && data.error === 'duplicate') ? 'Already on the list.' : 'Could not add.';
+    }
+  }
+  async function deleteRevive(id){
+    if(!confirm('Remove this player from the revive ban list?')) return;
+    const data = await sheetCall('reviveDelete', { id: String(id) });
+    noteRole(data);
+    if(data && data.ok){ revives = Array.isArray(data.revives) ? data.revives : revives; renderRevive(); }
+  }
+
   /* ===================== War list (master-controlled second view) ===================== */
   function normalizeWar(o){
     if(!o || typeof o !== 'object') return null;
@@ -1810,12 +1902,14 @@
   function switchView(view){
     activeView = view;
     $('#view-hitlist').hidden = view !== 'hitlist';
+    $('#view-revive').hidden = view !== 'revive';
     $('#view-war').hidden = view !== 'war';
     $('#view-payout').hidden = view !== 'payout';
     $('#view-calc').hidden = view !== 'calc';
     $('#view-mug').hidden = view !== 'mug';
     $('#view-settings').hidden = view !== 'settings';
     $('#tab-hitlist').classList.toggle('active', view === 'hitlist');
+    $('#tab-revive').classList.toggle('active', view === 'revive');
     $('#tab-war').classList.toggle('active', view === 'war');
     $('#tab-payout').classList.toggle('active', view === 'payout');
     $('#tab-calc').classList.toggle('active', view === 'calc');
@@ -1826,6 +1920,7 @@
     else if(view === 'payout') loadPayout();
     else if(view === 'calc') loadCalc();
     else if(view === 'mug') loadMug();
+    else if(view === 'revive') loadRevive();
     else if(view === 'settings') openSettings();
     else render();
   }
@@ -2806,6 +2901,8 @@
     $('#add-form').addEventListener('submit', async e => { e.preventDefault(); if(await addTarget($('#add-input').value)){ $('#add-input').value = ''; $('#add-input').focus(); } });
     $('#update-btn').addEventListener('click', updateStats);
     $('#reload-btn').addEventListener('click', syncList);
+    $('#revive-add-form').addEventListener('submit', e => { e.preventDefault(); addRevive(); });
+    $('#revive-reload-btn').addEventListener('click', syncRevive);
     $('#logout-btn').addEventListener('click', logout);
     $('#export-btn').addEventListener('click', exportJson);
     $('#human-toggle').addEventListener('change', e => setHuman(e.target.checked));
@@ -2820,6 +2917,7 @@
     document.addEventListener('click', e => { const d = $('#navdrop'); if(d && !d.contains(e.target)) closeNav(); });
     document.addEventListener('keydown', e => { if(e.key === 'Escape') closeNav(); });
     $('#tab-hitlist').addEventListener('click', () => switchView('hitlist'));
+    $('#tab-revive').addEventListener('click', () => switchView('revive'));
     $('#tab-war').addEventListener('click', () => switchView('war'));
     $('#tab-payout').addEventListener('click', () => switchView('payout'));
     $('#tab-calc').addEventListener('click', () => switchView('calc'));
